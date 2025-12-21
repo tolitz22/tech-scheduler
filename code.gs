@@ -437,7 +437,8 @@ function sendSaturdayReminder() {
       const to = TEST_EMAIL_ONLY || email;
       const subject = `Sunday Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
       const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles });
-      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event });
+      const summary = `Tech Duty — Your role: ${roles.join(", ")}`;
+      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event, summaryOverride: summary });
     }
     break;
   }
@@ -545,14 +546,15 @@ function sendMonthlyScheduleReminder_() {
           </div>
           <div>${rolePills}</div>
           <div style="margin:12px 0 0 0;color:#475569;">
-            Please RSVP using the buttons in this email.
+            Please RSVP using the buttons below this email.
           </div>
         `,
       });
 
       const subject = `Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
       const to = TEST_EMAIL_ONLY || email;
-      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody: html, event });
+      const summary = `Tech Duty — Your role: ${dateMap.get(k).join(", ")}`;
+      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody: html, event, summaryOverride: summary });
     });
   });
 }
@@ -1634,7 +1636,7 @@ function buildPrettyReminderEmail_({ prettyDate, roles }) {
       <div style="font-weight:700;margin:12px 0 6px 0;">Your role(s):</div>
       <div style="margin-bottom:10px;">${rolePills}</div>
 
-      <div style="margin:8px 0 6px 0;">Please RSVP using the buttons in this email.</div>
+      <div style="margin:8px 0 6px 0;">Please RSVP using the buttons below this email.</div>
 
       <div style="margin:10px 0 0 0;color:#334155;">
         We're grateful for your faithfulness.
@@ -1643,8 +1645,8 @@ function buildPrettyReminderEmail_({ prettyDate, roles }) {
   });
 }
 
-function sendCalendarInviteEmail_({ toEmail, subject, htmlBody, event }) {
-  const ics = buildIcsInvite_(event, toEmail);
+function sendCalendarInviteEmail_({ toEmail, subject, htmlBody, event, summaryOverride }) {
+  const ics = buildIcsInvite_(event, toEmail, summaryOverride);
   GmailApp.sendEmail(toEmail, subject, "Please view this email in HTML.", {
     htmlBody,
     attachments: [
@@ -1657,10 +1659,10 @@ function sendCalendarInviteEmail_({ toEmail, subject, htmlBody, event }) {
   });
 }
 
-function buildIcsInvite_(event, attendeeEmail) {
+function buildIcsInvite_(event, attendeeEmail, summaryOverride) {
   const now = new Date();
   const uid = event.getId();
-  const summary = escapeIcsText_(event.getTitle() || "Tech Duty");
+  const summary = escapeIcsText_(summaryOverride || event.getTitle() || "Tech Duty");
   const description = escapeIcsText_(event.getDescription() || "");
   const location = escapeIcsText_(event.getLocation() || "");
   const attendee = escapeIcsText_(attendeeEmail);
