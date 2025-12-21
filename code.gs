@@ -1,5 +1,5 @@
 /**
- * Church Tech Scheduler — One Single File (Option B + Confirm UX + Auto-create Event)
+ * Church Tech Scheduler — One Single File (Option B + Confirm UX + Auto-create Event + Tech Sub RSVP Buttons)
  *
  * ✅ Schedule is source of truth (emails)
  * ✅ Monthly sheets show NAMES (dropdown), store EMAILS in hidden columns
@@ -9,8 +9,22 @@
  * ✅ Saturday 5PM reminder emails
  * ✅ Batch scheduler creates missing Sundays/events
  *
+ * ✅ NEW: Tech Sub Emails + YES/NO buttons
+ * - When a role changes (oldEmail -> newEmail), sends:
+ *   (1) To Person A (old): "Tech Sub Confirmation"
+ *   (2) To Person B (new): "Tech Sub Invite" with YES/NO buttons
+ * - YES/NO buttons call Apps Script Web App (doGet) to update:
+ *   - Schedule RSVP column for that role/date
+ *   - Monthly RSVP column for that date
+ *   - Calendar event description (adds Sub RSVP line)
+ *   - (optional) guest add/remove
+ *
  * REQUIRED SCRIPT PROPERTIES:
  * - SPREADSHEET_ID = <your Google Sheet ID>
+ *
+ * REQUIRED CONFIG:
+ * - CONFIG.WEBAPP_URL = deployed Web App URL (Deploy > New deployment > Web app)
+ * - CONFIG.WEBAPP_SECRET = long random string
  */
 
 // =====================
@@ -48,6 +62,13 @@ const CONFIG = {
 
   // monthly sheet date format
   MONTH_DATE_FORMAT: "ddd, mmm d, yyyy",
+
+  // ===== NEW: Web App for YES/NO buttons =====
+  // Deploy > New deployment > Web app
+  // Execute as: Me
+  // Who has access: Anyone with the link (works for personal emails)
+  WEBAPP_URL: "https://script.google.com/macros/s/AKfycbw1FsNt5az_3-Dh_YAYIBmTGtPUJGVxoTfBEn_cnQA6irVCkdFn8lXlg13Lkj2pC4p2/exec", // <-- paste your deployed web app URL here
+  WEBAPP_SECRET: "AKfycbw1FsNt5az_3-Dh_YAYIBmTGtPUJGVxoTfBEn_cnQA6irVCkdFn8lXlg13Lkj2pC4p2",
 };
 
 // =====================
@@ -79,6 +100,7 @@ const MONTH_HEADERS = [
 // PENDING CONFIRM STATE
 // =====================
 const PENDING_KEY = "TECH_SCHED_PENDING_CHANGE";
+const SUB_PENDING_KEY = "TECH_SUB_PENDING_CONFIRMATIONS";
 
 // =====================
 // MENU
@@ -110,6 +132,8 @@ function onOpen() {
     .addSeparator()
     .addItem("Send Saturday Reminder", "sendSaturdayReminder")
     .addItem("Setup Saturday 5PM Trigger", "setupSaturday5pmTrigger")
+    .addSeparator()
+    .addItem("Show WebApp URL Help", "showWebAppHelp_")
     .addToUi();
 }
 
@@ -119,6 +143,246 @@ function install() {
   setupMonthlyEditSyncOptionB();
   setupRsvpSyncTrigger();
   SpreadsheetApp.getUi().alert("Installed triggers. Monthly changes now require Confirm & Send Emails.");
+}
+
+function showWebAppHelp_() {
+  SpreadsheetApp.getUi().alert(
+    "To enable YES/NO buttons:\n\n" +
+    "1) Deploy > New deployment > Web app\n" +
+    "2) Execute as: Me\n" +
+    "3) Who has access: Anyone with the link\n" +
+    "4) Copy the Web App URL and paste into CONFIG.WEBAPP_URL\n\n" +
+    "Security is enforced by signed links + roster + assignment checks."
+  );
+}
+
+// =====================
+// WEB APP ENDPOINT (YES/NO buttons)
+// =====================
+
+/**
+ * Secure RSVP endpoint.
+ * Only works if:
+ * 1) signature is valid (HMAC)
+ * 2) email exists in Roster
+ * 3) email matches current Schedule assignee for role+date (prevents forwarding)
+ *
+ * URL format:
+ *   <WEBAPP_URL>?a=YES&role=LiveStream&date=2026-01-04&email=x@y.com&eid=...&sig=...
+ */
+function doGet(e) {
+  try {
+    const p = (e && e.parameter) || {};
+    const action = String(p.a || "").toUpperCase(); // YES / NO
+    const role = String(p.role || "");
+    const dateKey = String(p.date || "");
+    const email = String(p.email || "").trim().toLowerCase();
+    const eventId = String(p.eid || "").trim();
+    const sig = String(p.sig || "");
+
+    if (!["YES", "NO"].includes(action)) return html_(uiMsg_("Invalid action."));
+    if (!role || !dateKey || !email || !eventId || !sig) return html_(uiMsg_("Missing parameters."));
+
+    // 1) Signature check (prevents guessing/tampering)
+    const expected = signRsvp_({ action, role, dateKey, email, eventId });
+    if (sig !== expected) return html_(uiMsg_("Invalid link. Please contact the Tech Team."));
+
+    const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+
+    // 2) Roster whitelist check
+    const roster = buildRosterMaps_(ss);
+    if (!roster.emailToName.has(email)) {
+      return html_(uiMsg_("You are not listed in the Tech Team roster."));
+    }
+
+    // 3) Assignment binding check (prevents forwarding)
+    const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+    if (!schedule) return html_(uiMsg_("Schedule sheet missing."));
+    ensureScheduleHeaders_(schedule);
+
+    const row = findOrCreateScheduleRowByDate_(schedule, dateKey);
+    const header = schedule.getRange(1, 1, 1, schedule.getLastColumn()).getValues()[0];
+    const H = headerIndex_(header);
+
+    if (H[role] == null) return html_(uiMsg_("Unknown role column."));
+    const expectedAssignee = String(schedule.getRange(row, H[role] + 1).getValue() || "").trim().toLowerCase();
+
+    if (expectedAssignee !== email) {
+      return html_(uiMsg_("This link is not for your assignment."));
+    }
+
+    applySubRsvpUpdate_({ action, role, dateKey, email, eventId });
+    return html_(uiSuccess_(action));
+  } catch (err) {
+    console.error(err);
+    return html_(uiMsg_("Something went wrong. Please message the Tech Team."));
+  }
+}
+
+function applySubRsvpUpdate_({ action, role, dateKey, email, eventId }) {
+  const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+  const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+  if (!schedule) throw new Error("Schedule sheet missing.");
+  ensureScheduleHeaders_(schedule);
+
+  // Update schedule RSVP
+  const row = findOrCreateScheduleRowByDate_(schedule, dateKey);
+  const header = schedule.getRange(1, 1, 1, schedule.getLastColumn()).getValues()[0];
+  const H = headerIndex_(header);
+
+  const rsvpColName =
+    role === "Audio" ? "Audio RSVP" :
+    role === "LiveStream" ? "LiveStream RSVP" :
+    role === "PPT" ? "PPT RSVP" :
+    "";
+
+  if (!rsvpColName || H[rsvpColName] == null) throw new Error("RSVP column missing for role: " + role);
+
+  const newVal = action === "YES" ? "Yes" : "No";
+  schedule.getRange(row, H[rsvpColName] + 1).setValue(newVal);
+
+  // Update monthly RSVP
+  updateMonthlyRsvpForDate_(ss, dateKey, {
+    Audio: role === "Audio" ? newVal : undefined,
+    LiveStream: role === "LiveStream" ? newVal : undefined,
+    PPT: role === "PPT" ? newVal : undefined,
+  });
+
+  // Update calendar event description (and optionally guest list)
+  const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
+  const event = safeGetEventById_(cal, eventId);
+  if (!event) throw new Error("Calendar event not found.");
+
+  const name = getNameFromEmail_(ss, email) || email;
+  const marker = `SUB_RSVP|${role}|${email}`;
+  const lines = String(event.getDescription() || "").split("\n");
+  const filtered = lines.filter(l => !String(l).includes(marker));
+
+  const statusText = action === "YES" ? "YES ✅" : "NO ❌";
+  filtered.push(`${marker} :: ${name} responded ${statusText}`);
+
+  event.setDescription(filtered.join("\n"));
+
+  if (!TEST_EMAIL_ONLY) {
+    if (action === "YES") {
+      ensureGuestOnEvent_(event, email);
+    } else {
+      try { event.removeGuest(email); } catch (_) {}
+    }
+  }
+
+  if (action === "YES") {
+    sendPendingSubConfirmationIfAny_(ss, dateKey, role, email);
+  }
+
+  // Optional: notify coordinator when NO
+  if (action === "NO") {
+    const coord = Session.getActiveUser().getEmail();
+    if (coord) {
+      GmailApp.sendEmail(
+        coord,
+        `[Tech Sub] NO - ${role} - ${dateKey}`,
+        `${email} declined to cover ${role} on ${dateKey}. Please coordinate in the Tech Group chat.`
+      );
+    }
+  }
+}
+
+function getPendingSubConfirmations_() {
+  const s = PropertiesService.getDocumentProperties().getProperty(SUB_PENDING_KEY);
+  const list = s ? JSON.parse(s) : [];
+  return Array.isArray(list) ? list : [];
+}
+
+function savePendingSubConfirmation_(item) {
+  const list = getPendingSubConfirmations_();
+  const key = `${item.dateKey}|${item.role}|${String(item.newEmail || "").toLowerCase()}`;
+  const filtered = list.filter(x =>
+    `${x.dateKey}|${x.role}|${String(x.newEmail || "").toLowerCase()}` !== key
+  );
+  filtered.push(item);
+  PropertiesService.getDocumentProperties().setProperty(SUB_PENDING_KEY, JSON.stringify(filtered));
+}
+
+function removePendingSubConfirmation_(dateKey, role, newEmail) {
+  const list = getPendingSubConfirmations_();
+  const key = `${dateKey}|${role}|${String(newEmail || "").toLowerCase()}`;
+  const filtered = list.filter(x =>
+    `${x.dateKey}|${x.role}|${String(x.newEmail || "").toLowerCase()}` !== key
+  );
+  PropertiesService.getDocumentProperties().setProperty(SUB_PENDING_KEY, JSON.stringify(filtered));
+}
+
+function sendPendingSubConfirmationIfAny_(ss, dateKey, role, newEmail) {
+  const list = getPendingSubConfirmations_();
+  const key = `${dateKey}|${role}|${String(newEmail || "").toLowerCase()}`;
+  const match = list.find(x =>
+    `${x.dateKey}|${x.role}|${String(x.newEmail || "").toLowerCase()}` === key
+  );
+  if (!match || !match.oldEmail) return;
+
+  const roster = buildRosterMaps_(ss);
+  const personAEmail = String(match.oldEmail || "").trim().toLowerCase();
+  const personBEmail = String(match.newEmail || "").trim().toLowerCase();
+  const personAName = roster.emailToName.get(personAEmail) || personAEmail;
+  const personBName = roster.emailToName.get(personBEmail) || personBEmail;
+  const prettyDate = Utilities.formatDate(new Date(dateKey + "T00:00:00"), CONFIG.TIMEZONE, "EEE, MMM d, yyyy");
+
+  const confHtml = buildTechSubConfirmationEmail_({
+    personAName,
+    personBName,
+    role,
+    prettyDate,
+  });
+  GmailApp.sendEmail(TEST_EMAIL_ONLY || personAEmail, "Tech Sub Confirmation", "Please view in HTML.", { htmlBody: confHtml });
+
+  removePendingSubConfirmation_(dateKey, role, newEmail);
+}
+
+function buildWebAppRsvpLink_({ action, role, dateKey, assigneeEmail, eventId }) {
+  if (!CONFIG.WEBAPP_URL) return "#";
+  const email = String(assigneeEmail || "").trim().toLowerCase();
+  const sig = signRsvp_({ action, role, dateKey, email, eventId });
+  const q = [
+    `a=${encodeURIComponent(action)}`,
+    `role=${encodeURIComponent(role)}`,
+    `date=${encodeURIComponent(dateKey)}`,
+    `email=${encodeURIComponent(email)}`,
+    `eid=${encodeURIComponent(eventId)}`,
+    `sig=${encodeURIComponent(sig)}`,
+  ].join("&");
+  return `${CONFIG.WEBAPP_URL}?${q}`;
+}
+
+function signRsvp_({ action, role, dateKey, email, eventId }) {
+  const base = [action, role, dateKey, String(email || "").trim().toLowerCase(), eventId].join("|");
+  const raw = Utilities.computeHmacSha256Signature(base, CONFIG.WEBAPP_SECRET);
+  return Utilities.base64EncodeWebSafe(raw);
+}
+
+function html_(body) {
+  return HtmlService.createHtmlOutput(body)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+function uiSuccess_(action) {
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;padding:18px;">
+      <div style="font-size:18px;font-weight:800;margin-bottom:6px;">Response recorded</div>
+      <div style="font-size:14px;color:#334155;">
+        You answered <b>${escapeHtml_(action)}</b>. Thank you!
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:#64748b;">
+        You may now close this tab.
+      </div>
+    </div>
+  `;
+}
+function uiMsg_(msg) {
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;padding:18px;">
+      <div style="font-size:14px;color:#334155;">${escapeHtml_(msg)}</div>
+    </div>
+  `;
 }
 
 // =====================
@@ -233,6 +497,9 @@ function runSchedulerBatch() {
         assignments.PPT,
         "",
         "",
+        "",
+        "",
+        "",
       ]);
 
       existing.set(dateKey, true);
@@ -268,7 +535,7 @@ function syncScheduleChanges() {
     ensureScheduleHeaders_(sh);
 
     for (let r = 2; r <= sh.getLastRow(); r++) {
-      syncScheduleChangesForRow_(sh, r);
+      syncScheduleChangesForRow_(ss, sh, r);
     }
   } finally {
     lock.releaseLock();
@@ -407,10 +674,11 @@ function updateMonthlyRsvpForDate_(ss, dateKey, rsvpByRole) {
     const colName = roleToCol[role];
     const colIdx = H[colName];
     if (colIdx == null) return;
-    const newVal = rsvpByRole[role] || "";
+    const newVal = rsvpByRole[role];
+    if (newVal == null) return; // allow partial updates
     const cell = sh.getRange(row, colIdx + 1);
     const curVal = String(cell.getValue() || "").trim();
-    if (newVal !== curVal) cell.setValue(newVal);
+    if (String(newVal) !== curVal) cell.setValue(newVal);
   });
 }
 
@@ -477,7 +745,8 @@ function onScheduleEdit(e) {
           return;
         }
       }
-      syncScheduleChangesForRow_(sh, row);
+      const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+      syncScheduleChangesForRow_(ss, sh, row);
     } finally {
       lock.releaseLock();
     }
@@ -491,10 +760,12 @@ function onScheduleEdit(e) {
  * - ensures calendar event exists (auto-create if missing)
  * - compares new vs last synced
  * - updates event description
- * - sends change email(s)
+ * - sends emails:
+ *    - if oldEmail+newEmail -> send Tech Sub Confirmation + Tech Sub Invite
+ *    - else -> send general schedule update
  * - updates last synced fields
  */
-function syncScheduleChangesForRow_(sh, row) {
+function syncScheduleChangesForRow_(ss, sh, row) {
   const data = sh.getDataRange().getValues();
   if (data.length < 2) return;
 
@@ -539,9 +810,13 @@ function syncScheduleChangesForRow_(sh, row) {
   const event = cal.getEventById(eventId);
   if (!event) throw new Error(`Event not found for row ${row}. Event Id: ${eventId}`);
 
+  // Always update description to reflect latest assignments
   event.setDescription(buildSundayDescription_(dateKey, { Audio: newA, LiveStream: newL, PPT: newP }));
-  sendPrettyChangeEmail_(dateKey, changes);
 
+  // Send emails (sub emails when old+new)
+  sendChangeEmailsSmart_(ss, dateKey, changes, eventId);
+
+  // Update last synced
   sh.getRange(row, H["Last Synced Audio"] + 1).setValue(newA);
   sh.getRange(row, H["Last Synced LiveStream"] + 1).setValue(newL);
   sh.getRange(row, H["Last Synced PPT"] + 1).setValue(newP);
@@ -577,7 +852,7 @@ function sendSaturdayReminder() {
   const H = headerIndex_(data[0]);
   const nextSunday = getNextSunday_(new Date(), CONFIG.TIMEZONE);
   const dateKey = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "yyyy-MM-dd");
-  const pretty = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "EEEE, MMM d, yyyy");
+  const pretty = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "EEE, MMM d, yyyy");
   const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
 
   for (let r = 1; r < data.length; r++) {
@@ -738,7 +1013,6 @@ function generateMonthlySheetsOptionB() {
     buildOneMonthSheetOptionB_(ss, sheetName, monthKey, scheduleMap, rosterMaps.emailToName);
   });
 
-  // Apply dropdowns after generating
   applyMonthlyDropdownsOptionB();
   SpreadsheetApp.getUi().alert("Monthly sheets generated (Option B).");
 }
@@ -757,7 +1031,6 @@ function applyMonthlyDropdownsOptionB() {
     const lastRow = sh.getLastRow();
     if (lastRow < 2) return;
 
-    // Write name lists into hidden columns after the RSVP columns (sources)
     const baseCol = sh.getLastColumn() + 1;
     sh.getRange(1, baseCol).setValue("_dropdown_sources_");
     sh.getRange(2, baseCol, Math.max(lastRow, 60), 3).clearContent();
@@ -768,7 +1041,6 @@ function applyMonthlyDropdownsOptionB() {
 
     sh.hideColumns(baseCol, 3);
 
-    // Validation ranges
     const audioRange = sh.getRange(2, baseCol, Math.max(rosterMaps.namesByRole.Audio.length, 1), 1);
     const liveRange  = sh.getRange(2, baseCol + 1, Math.max(rosterMaps.namesByRole.LiveStream.length, 1), 1);
     const pptRange   = sh.getRange(2, baseCol + 2, Math.max(rosterMaps.namesByRole.PPT.length, 1), 1);
@@ -777,7 +1049,6 @@ function applyMonthlyDropdownsOptionB() {
     const liveRule  = SpreadsheetApp.newDataValidation().requireValueInRange(liveRange, true).setAllowInvalid(true).build();
     const pptRule   = SpreadsheetApp.newDataValidation().requireValueInRange(pptRange, true).setAllowInvalid(true).build();
 
-    // Apply dropdowns to NAME columns B/C/D
     sh.getRange(2, 2, lastRow - 1, 1).setDataValidation(audioRule);
     sh.getRange(2, 3, lastRow - 1, 1).setDataValidation(liveRule);
     sh.getRange(2, 4, lastRow - 1, 1).setDataValidation(pptRule);
@@ -788,7 +1059,7 @@ function applyMonthlyDropdownsOptionB() {
   SpreadsheetApp.getUi().alert("Monthly dropdowns applied (Option B).");
 }
 
-// 3) Sync month sheets from Schedule (emails -> hidden email cols + names)
+// 3) Sync month sheets from Schedule
 function syncMonthlySheetsFromScheduleOptionB() {
   const ss = SpreadsheetApp.openById(getSpreadsheetId_());
   const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
@@ -832,7 +1103,7 @@ function setupMonthlyEditSyncOptionB() {
  * Monthly edit handler:
  * - updates hidden email (E/F/G) and Schedule (email)
  * - stores a pending change (for sidebar confirmation)
- * - DOES NOT send emails automatically (safe)
+ * - DOES NOT send emails automatically
  */
 function onMonthlyEditOptionB(e) {
   try {
@@ -850,7 +1121,6 @@ function onMonthlyEditOptionB(e) {
     if (row <= 1) return;
     if (col < 2 || col > 4) return;
 
-    // Guard to prevent recursion when we set values
     const props = PropertiesService.getScriptProperties();
     if (props.getProperty("MONTH_EDIT_GUARD") === "1") return;
 
@@ -878,7 +1148,6 @@ function onMonthlyEditOptionB(e) {
       const H = headerIndex_(header);
       const oldEmail = String(schedule.getRange(scheduleRow, H[roleLabel] + 1).getValue() || "").trim();
 
-      // Map name -> email
       const rosterMaps = buildRosterMaps_(ss);
       const pickedEmail = rosterMaps.nameToEmail.get(newName) || "";
       if (newName && !pickedEmail) {
@@ -901,13 +1170,12 @@ function onMonthlyEditOptionB(e) {
         if (warn) ss.toast(warn, "Tech Scheduler", 8);
       }
 
-      // Write hidden email (B→E, C→F, D→G)
+      // Hidden email (B→E, C→F, D→G)
       props.setProperty("MONTH_EDIT_GUARD", "1");
       sh.getRange(row, col + 3).setValue(pickedEmail);
       props.deleteProperty("MONTH_EDIT_GUARD");
 
-      // Update Schedule (email)
-      // Update the ministry email column
+      // Update Schedule (source of truth)
       schedule.getRange(scheduleRow, H[roleLabel] + 1).setValue(pickedEmail);
 
       // Save pending change for confirmation UX
@@ -920,7 +1188,7 @@ function onMonthlyEditOptionB(e) {
         role: roleLabel,
         fromName: oldName || "",
         toName: newName || "",
-        fromEmail: "", // we can look it up later if needed
+        fromEmail: oldEmail || "",
         toEmail: pickedEmail || "",
         createdAt: new Date().toISOString(),
       });
@@ -1023,7 +1291,7 @@ function confirmAndSendEmails() {
   const dateKeys = new Set(pending.map(p => p.dateKey).filter(Boolean));
   dateKeys.forEach(dateKey => {
     const scheduleRow = findOrCreateScheduleRowByDate_(schedule, dateKey);
-    syncScheduleChangesForRow_(schedule, scheduleRow);
+    syncScheduleChangesForRow_(ss, schedule, scheduleRow);
   });
 
   clearPendingChanges_();
@@ -1050,13 +1318,14 @@ function cancelPendingChange() {
     const sh = ss.getSheetByName(p.sheetName);
     if (!sh) return;
     sh.getRange(p.row, p.col).setValue(p.fromName || "");
+    // restore hidden email too
+    try {
+      sh.getRange(p.row, p.col + 3).setValue(p.fromEmail || "");
+    } catch (_) {}
   });
   props.deleteProperty("MONTH_EDIT_GUARD");
 
-  // NOTE: we intentionally do NOT revert Schedule automatically here
-  // because Schedule is the source of truth; if you want it reverted too, tell me and I'll add it.
   clearPendingChanges_();
-
   ss.toast("Cancelled. No emails sent.", "Tech Scheduler", 6);
 }
 
@@ -1119,9 +1388,7 @@ function buildOneMonthSheetOptionB_(ss, sheetName, monthKey, scheduleMap, emailT
     sh.getRange(2, 1, rows.length, 1).setNumberFormat(CONFIG.MONTH_DATE_FORMAT);
   }
 
-  // hide email columns E-G
   sh.hideColumns(5, 3);
-
   applyPrettyMonthFormattingOptionB_(sh);
   sh.setFrozenRows(1);
 }
@@ -1148,17 +1415,14 @@ function syncOneMonthSheetOptionB_(sh, scheduleMap, emailToName) {
     const lEmail = entry.LiveStream || "";
     const pEmail = entry.PPT || "";
 
-    // Names
     sh.getRange(r, 2).setValue(emailToName.get(aEmail) || "");
     sh.getRange(r, 3).setValue(emailToName.get(lEmail) || "");
     sh.getRange(r, 4).setValue(emailToName.get(pEmail) || "");
 
-    // Hidden emails
     sh.getRange(r, 5).setValue(aEmail);
     sh.getRange(r, 6).setValue(lEmail);
     sh.getRange(r, 7).setValue(pEmail);
 
-    // RSVP status
     sh.getRange(r, 8).setValue(entry.AudioRsvp || "");
     sh.getRange(r, 9).setValue(entry.LiveStreamRsvp || "");
     sh.getRange(r, 10).setValue(entry.PptRsvp || "");
@@ -1195,7 +1459,6 @@ function ensureMonthHeadersOptionB_(sh) {
   }
 }
 
-// Pretty formatting for Option B month sheets
 function applyPrettyMonthFormattingOptionB_(sh) {
   sh.setRowHeight(1, 34);
   sh.setColumnWidth(1, 190);
@@ -1227,14 +1490,14 @@ function applyPrettyMonthFormattingOptionB_(sh) {
   }
 
   sh.setFrozenRows(1);
-  sh.hideColumns(5, 3); // hide emails
-  sh.showColumns(8, 3); // ensure RSVP columns visible
+  sh.hideColumns(5, 3);
+  sh.showColumns(8, 3);
 }
 
-// ---------------------
+// =====================
 // Roster maps (Name <-> Email) + eligible names per ministry
 // Roster headers required: Name | Email | Audio | LiveStream | PPT
-// ---------------------
+// =====================
 function buildRosterMaps_(ss) {
   const sh = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME);
   if (!sh) throw new Error(`Missing sheet: ${CONFIG.ROSTER_SHEET_NAME}`);
@@ -1257,7 +1520,7 @@ function buildRosterMaps_(ss) {
 
   for (let r = 1; r < data.length; r++) {
     const name = String(data[r][H["Name"]] || "").trim();
-    const email = String(data[r][H["Email"]] || "").trim();
+    const email = String(data[r][H["Email"]] || "").trim().toLowerCase();
     if (!name || !email) continue;
 
     nameToEmail.set(name, email);
@@ -1275,6 +1538,15 @@ function buildRosterMaps_(ss) {
   return { nameToEmail, emailToName, namesByRole };
 }
 
+function getNameFromEmail_(ss, email) {
+  try {
+    const roster = buildRosterMaps_(ss);
+    return roster.emailToName.get(String(email || "").trim().toLowerCase()) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
 function writeList_(sh, col, list) {
   if (!list || !list.length) {
     sh.getRange(2, col, 1, 1).setValue("");
@@ -1285,8 +1557,7 @@ function writeList_(sh, col, list) {
 
 // ---------------------
 // Find or create Schedule row by dateKey
-// (creates row WITHOUT calendar event id; sync will auto-create event)
- // ---------------------
+// ---------------------
 function findOrCreateScheduleRowByDate_(schedule, dateKey) {
   const values = schedule.getDataRange().getValues();
   const H = headerIndex_(values[0]);
@@ -1324,7 +1595,6 @@ function ensureCalendarEventForScheduleRow_(scheduleSheet, row) {
 
   const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
 
-  // If eventId exists but event is missing (deleted), treat as missing
   let event = null;
   if (eventId) {
     try {
@@ -1346,7 +1616,6 @@ function ensureCalendarEventForScheduleRow_(scheduleSheet, row) {
       description: buildSundayDescription_(dateKey, assignments),
     });
 
-    // Invite guests (TEST mode respected)
     if (TEST_EMAIL_ONLY) {
       event.addGuest(TEST_EMAIL_ONLY);
     } else {
@@ -1463,33 +1732,6 @@ function loadExistingScheduleByDate_(sh) {
   return out;
 }
 
-function rebuildCountsByMonthFromSheet_(sh) {
-  const countsByMonth = new Map();
-  const data = sh.getDataRange().getValues();
-  if (data.length < 2) return countsByMonth;
-
-  const H = headerIndex_(data[0]);
-
-  for (let r = 1; r < data.length; r++) {
-    const dateKey = normalizeDateKey_(data[r][H["Date"]]);
-    if (!dateKey) continue;
-    const monthKey = dateKey.slice(0, 7);
-
-    if (!countsByMonth.has(monthKey)) countsByMonth.set(monthKey, new Map());
-    const monthMap = countsByMonth.get(monthKey);
-
-    for (const ministry of CONFIG.MINISTRIES) {
-      if (!monthMap.has(ministry)) monthMap.set(ministry, new Map());
-      const mMap = monthMap.get(ministry);
-
-      const email = data[r][H[ministry]];
-      if (!email) continue;
-      mMap.set(email, (mMap.get(email) || 0) + 1);
-    }
-  }
-  return countsByMonth;
-}
-
 function rebuildCountsByMonthAllRolesFromSheet_(sh) {
   const countsByMonth = new Map();
   const data = sh.getDataRange().getValues();
@@ -1539,24 +1781,6 @@ function rebuildEmailToDatesFromSheet_(sh) {
   return emailToDates;
 }
 
-function rebuildLastAssignedFromSheet_(sh) {
-  const lastAssigned = new Map();
-  const data = sh.getDataRange().getValues();
-  if (data.length < 2) return lastAssigned;
-
-  const H = headerIndex_(data[0]);
-  for (let r = data.length - 1; r >= 1; r--) {
-    for (const ministry of CONFIG.MINISTRIES) {
-      if (!lastAssigned.has(ministry)) {
-        const email = data[r][H[ministry]];
-        if (email) lastAssigned.set(ministry, email);
-      }
-    }
-    if (lastAssigned.size === CONFIG.MINISTRIES.length) break;
-  }
-  return lastAssigned;
-}
-
 function buildSundayDescription_(dateKey, assignments) {
   return (
     `Church Tech Assignments\n` +
@@ -1602,7 +1826,7 @@ function buildScheduleMap_(scheduleSheet) {
 // MONTH HELPERS
 // =====================
 function monthNameFromKey_(monthKey) {
-  const m = Number(monthKey.split("-")[1]); // 1..12
+  const m = Number(monthKey.split("-")[1]);
   return MONTH_SHEETS[m - 1];
 }
 
@@ -1633,6 +1857,14 @@ function endOfMonth_(dateInMonth) {
   return d;
 }
 
+function isLastDayOfMonth_(d, tz) {
+  const key = Utilities.formatDate(d, tz, "yyyy-MM-dd");
+  const next = new Date(d);
+  next.setDate(next.getDate() + 1);
+  const keyNext = Utilities.formatDate(next, tz, "yyyy-MM-dd");
+  return key.slice(0, 7) !== keyNext.slice(0, 7);
+}
+
 // =====================
 // ROSTER + PICKING
 // =====================
@@ -1648,7 +1880,7 @@ function readRosterFromSheet_(ss, sheetName) {
 
   const roster = [];
   for (let r = 1; r < data.length; r++) {
-    const email = String(data[r][H["Email"]] || "").trim();
+    const email = String(data[r][H["Email"]] || "").trim().toLowerCase();
     if (!email) continue;
 
     const eligible = {};
@@ -1910,7 +2142,7 @@ function buildIcsInvite_(event, attendeeEmail, summaryOverride) {
 
 function ensureGuestOnEvent_(event, email) {
   if (!email) return;
-  const exists = event.getGuestList().some(g => String(g.getEmail() || "").trim() === email);
+  const exists = event.getGuestList().some(g => String(g.getEmail() || "").trim().toLowerCase() === String(email).trim().toLowerCase());
   if (!exists) {
     try {
       event.addGuest(email);
@@ -1932,6 +2164,177 @@ function escapeIcsText_(s) {
     .replace(/\n/g, "\\n")
     .replace(/;/g, "\\;")
     .replace(/,/g, "\\,");
+}
+
+// =====================
+// NEW: Tech Sub Emails (Confirmation + Invite with YES/NO buttons)
+// =====================
+function sendChangeEmailsSmart_(ss, dateKey, changes, eventId) {
+  const roster = buildRosterMaps_(ss);
+  const prettyDate = Utilities.formatDate(new Date(dateKey + "T00:00:00"), CONFIG.TIMEZONE, "EEE, MMM d, yyyy");
+
+  // If it looks like a substitution (old + new), send the Tech Sub emails.
+  // Otherwise, fallback to generic "Schedule Update".
+  const subs = changes.filter(c => c.oldEmail && c.newEmail && c.oldEmail !== c.newEmail);
+
+  subs.forEach(c => {
+    const personAEmail = String(c.oldEmail || "").trim().toLowerCase();
+    const personBEmail = String(c.newEmail || "").trim().toLowerCase();
+
+    const personAName = roster.emailToName.get(personAEmail) || personAEmail;
+    const personBName = roster.emailToName.get(personBEmail) || personBEmail;
+
+    // Mark role RSVP as Invited when a sub is requested
+    setRoleRsvpInvited_(ss, dateKey, c.role);
+
+    // Defer Person A confirmation until Person B clicks YES.
+    savePendingSubConfirmation_({
+      dateKey,
+      role: c.role,
+      oldEmail: personAEmail,
+      newEmail: personBEmail,
+      createdAt: new Date().toISOString(),
+    });
+
+    // (2) Person B invite with YES/NO buttons
+    const inviteHtml = buildTechSubInviteEmail_({
+      personAName,
+      personBName,
+      personBEmail,
+      role: c.role,
+      prettyDate,
+      dateKey,
+      eventId,
+    });
+    GmailApp.sendEmail(TEST_EMAIL_ONLY || personBEmail, "Tech Sub Invite", "Please view in HTML.", { htmlBody: inviteHtml });
+  });
+
+  // For non-sub changes, generic schedule update to affected emails
+  const nonSubs = changes.filter(c => !(c.oldEmail && c.newEmail && c.oldEmail !== c.newEmail));
+  if (nonSubs.length) sendPrettyChangeEmail_(dateKey, nonSubs);
+}
+
+function setRoleRsvpInvited_(ss, dateKey, role) {
+  const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+  if (!schedule) return;
+  ensureScheduleHeaders_(schedule);
+
+  const row = findOrCreateScheduleRowByDate_(schedule, dateKey);
+  const header = schedule.getRange(1, 1, 1, schedule.getLastColumn()).getValues()[0];
+  const H = headerIndex_(header);
+
+  const rsvpColName =
+    role === "Audio" ? "Audio RSVP" :
+    role === "LiveStream" ? "LiveStream RSVP" :
+    role === "PPT" ? "PPT RSVP" :
+    "";
+
+  if (!rsvpColName || H[rsvpColName] == null) return;
+
+  schedule.getRange(row, H[rsvpColName] + 1).setValue("Invited");
+
+  updateMonthlyRsvpForDate_(ss, dateKey, {
+    Audio: role === "Audio" ? "Invited" : undefined,
+    LiveStream: role === "LiveStream" ? "Invited" : undefined,
+    PPT: role === "PPT" ? "Invited" : undefined,
+  });
+}
+
+function buildTechSubConfirmationEmail_({ personAName, personBName, role, prettyDate }) {
+  return buildPrettyEmail_({
+    title: "Tech Sub Confirmation",
+    subtitle: prettyDate,
+    bodyHtml: `
+      <div style="margin:0 0 12px 0;">Hi <b>${escapeHtml_(personAName || "there")}!</b></div>
+
+      <div style="margin:0 0 14px 0;">
+        This is to confirm that <b>${escapeHtml_(personBName || "someone")}</b> will cover for your volunteer duty as
+        <b>${escapeHtml_(role)}</b> on <b>${escapeHtml_(prettyDate)}</b>.
+      </div>
+
+      <div style="margin:0 0 14px 0;color:#334155;">
+        We’re looking forward to your next volunteer schedule!
+      </div>
+
+      <div style="margin:0;">Thank you for serving in our church’s tech ministry.</div>
+    `,
+  });
+}
+
+function buildTechSubInviteEmail_({ personAName, personBName, personBEmail, role, prettyDate, dateKey, eventId }) {
+  const eid = eventId || getEventIdByDateKey_(dateKey);
+
+  const yesLink = buildWebAppRsvpLink_({
+    action: "YES",
+    role,
+    dateKey,
+    assigneeEmail: personBEmail,
+    eventId: eid,
+  });
+
+  const noLink = buildWebAppRsvpLink_({
+    action: "NO",
+    role,
+    dateKey,
+    assigneeEmail: personBEmail,
+    eventId: eid,
+  });
+
+  return buildPrettyEmail_({
+    title: "Tech Sub Invite",
+    subtitle: prettyDate,
+    bodyHtml: `
+      <div style="margin:0 0 12px 0;">
+        Hi <b>${escapeHtml_(personBName || "there")}!</b>
+      </div>
+
+      <div style="margin:0 0 14px 0;">
+        <b>${escapeHtml_(personAName || "Someone")}</b> has tagged you to cover for his volunteer duty as
+        <b>${escapeHtml_(role)}</b> on <b>${escapeHtml_(prettyDate)}</b>.
+      </div>
+
+      <div style="font-weight:800;margin:16px 0 10px 0;">Are you available?</div>
+
+      <div style="display:flex;gap:10px;margin:0 0 14px 0;">
+        <a href="${yesLink}"
+          style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;
+            padding:12px 16px;border-radius:12px;font-weight:800;">
+          Yes
+        </a>
+
+        <a href="${noLink}"
+          style="display:inline-block;background:#ffffff;color:#111827;text-decoration:none;
+            padding:12px 16px;border-radius:12px;font-weight:800;border:1px solid #e5e7eb;">
+          No
+        </a>
+      </div>
+
+      <div style="color:#334155;margin:0 0 14px 0;">
+        If you have conflicts please click <b>No</b> and notify us through Tech Group chat as soon as possible.
+      </div>
+
+      <div style="margin:0;">
+        Thank you for serving in our church’s tech ministry
+      </div>
+    `,
+  });
+}
+
+function getEventIdByDateKey_(dateKey) {
+  const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+  const sh = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+  if (!sh) return "";
+  ensureScheduleHeaders_(sh);
+
+  const data = sh.getDataRange().getValues();
+  if (data.length < 2) return "";
+  const H = headerIndex_(data[0]);
+
+  for (let r = 1; r < data.length; r++) {
+    const k = normalizeDateKey_(data[r][H["Date"]]);
+    if (k === dateKey) return String(data[r][H["Event Id"]] || "").trim();
+  }
+  return "";
 }
 
 function sendPrettyChangeEmail_(dateKey, changes) {
@@ -1971,8 +2374,8 @@ function sendPrettyChangeEmail_(dateKey, changes) {
 
   const emails = new Set();
   changes.forEach(c => {
-    if (c.oldEmail) emails.add(c.oldEmail);
-    if (c.newEmail) emails.add(c.newEmail);
+    if (c.oldEmail) emails.add(String(c.oldEmail).trim().toLowerCase());
+    if (c.newEmail) emails.add(String(c.newEmail).trim().toLowerCase());
   });
 
   const subject = `Schedule Update | ${CONFIG.TECH_TEAM_NAME}`;
@@ -2000,11 +2403,12 @@ function isEmailAssignedOnDate_(scheduleSheet, dateKey, email) {
   if (data.length < 2) return false;
   const H = headerIndex_(data[0]);
   const roles = getRoleColumns_();
+  const target = String(email).trim().toLowerCase();
 
   for (let r = 1; r < data.length; r++) {
     const k = normalizeDateKey_(data[r][H["Date"]]);
     if (k !== dateKey) continue;
-    return roles.some(role => String(data[r][H[role]] || "").trim() === email);
+    return roles.some(role => String(data[r][H[role]] || "").trim().toLowerCase() === target);
   }
   return false;
 }
@@ -2015,13 +2419,14 @@ function countEmailAssignmentsInMonth_(scheduleSheet, email, monthKey) {
   if (data.length < 2) return 0;
   const H = headerIndex_(data[0]);
   const roles = getRoleColumns_();
+  const target = String(email).trim().toLowerCase();
 
   let count = 0;
   for (let r = 1; r < data.length; r++) {
     const dateKey = normalizeDateKey_(data[r][H["Date"]]);
     if (!dateKey || !dateKey.startsWith(monthKey)) continue;
     roles.forEach(role => {
-      if (String(data[r][H[role]] || "").trim() === email) count++;
+      if (String(data[r][H[role]] || "").trim().toLowerCase() === target) count++;
     });
   }
   return count;
@@ -2031,7 +2436,7 @@ function isConsecutiveAssignment_(email, dateKey, emailToDates) {
   if (!email) return false;
   const prevKey = dateKeyAddDays_(dateKey, -7);
   const nextKey = dateKeyAddDays_(dateKey, 7);
-  const dates = emailToDates && emailToDates.get(email);
+  const dates = emailToDates && emailToDates.get(String(email).trim().toLowerCase());
   if (!dates) return false;
   return dates.has(prevKey) || dates.has(nextKey);
 }
@@ -2046,19 +2451,20 @@ function validateAssignmentForScheduleRow_(scheduleSheet, row, roleLabel, email,
   if (!dateKey) return "Missing Date for this row.";
 
   const roles = getRoleColumns_();
-  const currentRoleEmail = String(scheduleSheet.getRange(row, H[roleLabel] + 1).getValue() || "").trim();
-  if (currentRoleEmail === email) return null;
+  const target = String(email).trim().toLowerCase();
+  const currentRoleEmail = String(scheduleSheet.getRange(row, H[roleLabel] + 1).getValue() || "").trim().toLowerCase();
+  if (currentRoleEmail === target) return null;
 
   for (const role of roles) {
     if (role === roleLabel) continue;
-    const otherEmail = String(scheduleSheet.getRange(row, H[role] + 1).getValue() || "").trim();
-    if (otherEmail === email) {
+    const otherEmail = String(scheduleSheet.getRange(row, H[role] + 1).getValue() || "").trim().toLowerCase();
+    if (otherEmail === target) {
       return "That person already has another role on this Sunday.";
     }
   }
 
   const monthKey = dateKey.slice(0, 7);
-  const currentCount = countEmailAssignmentsInMonth_(scheduleSheet, email, monthKey);
+  const currentCount = countEmailAssignmentsInMonth_(scheduleSheet, target, monthKey);
   if (currentCount >= CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY) {
     return `That person already has ${CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY} assignment(s) this month.`;
   }
@@ -2066,7 +2472,7 @@ function validateAssignmentForScheduleRow_(scheduleSheet, row, roleLabel, email,
   if (opts.enforceConsecutive) {
     const prevKey = dateKeyAddDays_(dateKey, -7);
     const nextKey = dateKeyAddDays_(dateKey, 7);
-    if (isEmailAssignedOnDate_(scheduleSheet, prevKey, email) || isEmailAssignedOnDate_(scheduleSheet, nextKey, email)) {
+    if (isEmailAssignedOnDate_(scheduleSheet, prevKey, target) || isEmailAssignedOnDate_(scheduleSheet, nextKey, target)) {
       return "That person is already assigned on a consecutive Sunday.";
     }
   }
@@ -2081,9 +2487,10 @@ function getConsecutiveWarning_(scheduleSheet, row, email) {
   const dateKey = normalizeDateKey_(scheduleSheet.getRange(row, H["Date"] + 1).getValue());
   if (!dateKey) return null;
 
+  const target = String(email).trim().toLowerCase();
   const prevKey = dateKeyAddDays_(dateKey, -7);
   const nextKey = dateKeyAddDays_(dateKey, 7);
-  if (isEmailAssignedOnDate_(scheduleSheet, prevKey, email) || isEmailAssignedOnDate_(scheduleSheet, nextKey, email)) {
+  if (isEmailAssignedOnDate_(scheduleSheet, prevKey, target) || isEmailAssignedOnDate_(scheduleSheet, nextKey, target)) {
     return "Warning: That person is also assigned on a consecutive Sunday.";
   }
   return null;
