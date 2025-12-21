@@ -91,6 +91,8 @@ function onOpen() {
     .addItem("Setup Monthly Reminder (Last Day)", "setupMonthlyScheduleReminderTrigger")
     .addItem("Send Monthly Reminder Now", "sendMonthlyScheduleReminder_")
     .addSeparator()
+    .addItem("Check Email Quota", "logEmailQuota")
+    .addSeparator()
     .addItem("Confirm & Send Emails", "openConfirmSendSidebar")
     .addItem("Cancel Pending Change", "cancelPendingChange")
     .addSeparator()
@@ -432,6 +434,17 @@ function sendSaturdayReminder() {
     }
     break;
   }
+}
+
+// =====================
+// EMAIL QUOTA
+// =====================
+function logEmailQuota() {
+  const remaining = MailApp.getRemainingDailyQuota();
+  Logger.log(`Remaining daily email quota: ${remaining}`);
+  try {
+    SpreadsheetApp.getActive().toast(`Remaining daily email quota: ${remaining}`, "Tech Scheduler", 6);
+  } catch (_) {}
 }
 
 // =====================
