@@ -416,17 +416,9 @@ function sendSaturdayReminder() {
   const nextSunday = getNextSunday_(new Date(), CONFIG.TIMEZONE);
   const dateKey = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "yyyy-MM-dd");
   const pretty = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "EEEE, MMM d, yyyy");
-  const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
 
   for (let r = 1; r < data.length; r++) {
     if (normalizeDateKey_(data[r][H["Date"]]) !== dateKey) continue;
-
-    const row = r + 1;
-    ensureCalendarEventForScheduleRow_(sh, row);
-    const eventId = String(sh.getRange(row, H["Event Id"] + 1).getValue() || "").trim();
-    if (!eventId) return;
-    const event = cal.getEventById(eventId);
-    if (!event) return;
 
     const rolesByEmail = new Map();
     addRole_(rolesByEmail, data[r][H["Audio"]], "Audio");
@@ -436,9 +428,9 @@ function sendSaturdayReminder() {
     for (const [email, roles] of rolesByEmail) {
       const to = TEST_EMAIL_ONLY || email;
       const subject = `Sunday Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
-      const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles });
-      const summary = `Tech Duty — Your role: ${roles.join(", ")}`;
-      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event, summaryOverride: summary });
+      GmailApp.sendEmail(to, subject, "Please view this email in HTML.", {
+        htmlBody: buildPrettyReminderEmail_({ prettyDate: pretty, roles }),
+      });
     }
     break;
   }
@@ -489,21 +481,18 @@ function sendMonthlyScheduleReminder_() {
   const H = headerIndex_(data[0]);
   const roles = getRoleColumns_();
   const rosterMaps = buildRosterMaps_(ss);
-  const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
 
   const now = new Date(Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd") + "T00:00:00");
   const nextMonth = new Date(now);
   nextMonth.setMonth(nextMonth.getMonth() + 1);
   const monthKey = Utilities.formatDate(nextMonth, CONFIG.TIMEZONE, "yyyy-MM");
+  const monthLabel = Utilities.formatDate(nextMonth, CONFIG.TIMEZONE, "MMMM yyyy");
 
   const byEmail = new Map();
-  const rowByDate = new Map();
 
   for (let r = 1; r < data.length; r++) {
     const dateKey = normalizeDateKey_(data[r][H["Date"]]);
     if (!dateKey || !dateKey.startsWith(monthKey)) continue;
-
-    if (!rowByDate.has(dateKey)) rowByDate.set(dateKey, r + 1);
 
     roles.forEach(role => {
       const email = String(data[r][H[role]] || "").trim();
@@ -517,45 +506,37 @@ function sendMonthlyScheduleReminder_() {
 
   if (!byEmail.size) return;
 
-  const eventIdByDate = new Map();
-  rowByDate.forEach((row, dateKey) => {
-    ensureCalendarEventForScheduleRow_(sh, row);
-    const eventId = String(sh.getRange(row, H["Event Id"] + 1).getValue() || "").trim();
-    if (eventId) eventIdByDate.set(dateKey, eventId);
-  });
-
   byEmail.forEach((dateMap, email) => {
     const dateKeys = Array.from(dateMap.keys()).sort();
-    dateKeys.forEach(k => {
-      const eventId = eventIdByDate.get(k);
-      if (!eventId) return;
-      const event = cal.getEventById(eventId);
-      if (!event) return;
-
+    const items = dateKeys.map(k => {
       const pretty = Utilities.formatDate(new Date(k + "T00:00:00"), CONFIG.TIMEZONE, "EEE, MMM d, yyyy");
       const rolePills = dateMap.get(k).map(r => pill_(r)).join("");
-      const displayName = rosterMaps.emailToName.get(email) || "there";
-
-      const html = buildPrettyEmail_({
-        title: "Tech Duty Reminder",
-        subtitle: pretty,
-        bodyHtml: `
-          <div style="margin:0 0 10px 0;">
-            Hi ${escapeHtml_(displayName)},<br/>
-            Thank you for serving. Here are your role(s) for this date:
-          </div>
+      return `
+        <div style="margin:10px 0;">
+          <div style="font-weight:700;margin-bottom:6px;">${escapeHtml_(pretty)}</div>
           <div>${rolePills}</div>
-          <div style="margin:12px 0 0 0;color:#475569;">
-            Please RSVP using the buttons below this email.
-          </div>
-        `,
-      });
+        </div>
+      `;
+    }).join("");
 
-      const subject = `Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
-      const to = TEST_EMAIL_ONLY || email;
-      const summary = `Tech Duty — Your role: ${dateMap.get(k).join(", ")}`;
-      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody: html, event, summaryOverride: summary });
+    const displayName = rosterMaps.emailToName.get(email) || "there";
+    const html = buildPrettyEmail_({
+      title: "Your Schedule for Next Month",
+      subtitle: monthLabel,
+      bodyHtml: `
+        <div style="margin:0 0 10px 0;">
+          Hi ${escapeHtml_(displayName)},<br/>
+          Thank you for serving. Here is your schedule for next month:
+        </div>
+        ${items}
+        <div style="margin:12px 0 0 0;color:#475569;">
+          If anything needs to change, just reply to this email.
+        </div>
+      `,
     });
+
+    const subject = `Next Month Schedule | ${CONFIG.TECH_TEAM_NAME}`;
+    GmailApp.sendEmail(TEST_EMAIL_ONLY || email, subject, "Please view this email in HTML.", { htmlBody: html });
   });
 }
 
@@ -1361,12 +1342,6 @@ function buildSundayDescription_(dateKey, assignments) {
   );
 }
 
-function buildCalendarEventLink_(eventId, calendarId) {
-  let eid = Utilities.base64EncodeWebSafe(`${eventId} ${calendarId}`);
-  eid = eid.replace(/=+$/, "");
-  return `https://calendar.google.com/calendar/u/0/r/event?eid=${eid}`;
-}
-
 // =====================
 // SCHEDULE MAP (dateKey -> emails)
 // =====================
@@ -1636,89 +1611,11 @@ function buildPrettyReminderEmail_({ prettyDate, roles }) {
       <div style="font-weight:700;margin:12px 0 6px 0;">Your role(s):</div>
       <div style="margin-bottom:10px;">${rolePills}</div>
 
-      <div style="margin:8px 0 6px 0;">Please RSVP using the buttons below this email.</div>
-
       <div style="margin:10px 0 0 0;color:#334155;">
         We're grateful for your faithfulness.
       </div>
     `,
   });
-}
-
-function sendCalendarInviteEmail_({ toEmail, subject, htmlBody, event, summaryOverride }) {
-  const ics = buildIcsInvite_(event, toEmail, summaryOverride);
-  GmailApp.sendEmail(toEmail, subject, "Please view this email in HTML.", {
-    htmlBody,
-    attachments: [
-      {
-        fileName: "invite.ics",
-        mimeType: "text/calendar; charset=UTF-8; method=REQUEST",
-        content: ics,
-      },
-    ],
-  });
-}
-
-function buildIcsInvite_(event, attendeeEmail, summaryOverride) {
-  const now = new Date();
-  const uid = event.getId();
-  const summary = escapeIcsText_(summaryOverride || event.getTitle() || "Tech Duty");
-  const description = escapeIcsText_(event.getDescription() || "");
-  const location = escapeIcsText_(event.getLocation() || "");
-  const attendee = escapeIcsText_(attendeeEmail);
-
-  const dtStamp = formatIcsDateTimeUtc_(now);
-
-  let dtStart = "";
-  let dtEnd = "";
-  if (event.isAllDayEvent()) {
-    dtStart = `DTSTART;VALUE=DATE:${formatIcsDate_(event.getStartTime())}`;
-    dtEnd = `DTEND;VALUE=DATE:${formatIcsDate_(event.getEndTime())}`;
-  } else {
-    dtStart = `DTSTART:${formatIcsDateTimeUtc_(event.getStartTime())}`;
-    dtEnd = `DTEND:${formatIcsDateTimeUtc_(event.getEndTime())}`;
-  }
-
-  const organizerEmail = Session.getActiveUser().getEmail() || "";
-  const organizerLine = organizerEmail
-    ? `ORGANIZER;CN=${escapeIcsText_(CONFIG.TECH_TEAM_NAME)}:MAILTO:${escapeIcsText_(organizerEmail)}`
-    : "";
-
-  return [
-    "BEGIN:VCALENDAR",
-    "PRODID:-//Church Tech Scheduler//EN",
-    "VERSION:2.0",
-    "CALSCALE:GREGORIAN",
-    "METHOD:REQUEST",
-    "BEGIN:VEVENT",
-    `UID:${escapeIcsText_(uid)}`,
-    `DTSTAMP:${dtStamp}`,
-    dtStart,
-    dtEnd,
-    `SUMMARY:${summary}`,
-    description ? `DESCRIPTION:${description}` : "",
-    location ? `LOCATION:${location}` : "",
-    organizerLine,
-    `ATTENDEE;CN=${attendee};ROLE=REQ-PARTICIPANT;RSVP=TRUE:MAILTO:${attendee}`,
-    "END:VEVENT",
-    "END:VCALENDAR",
-  ].filter(Boolean).join("\r\n");
-}
-
-function formatIcsDate_(d) {
-  return Utilities.formatDate(d, CONFIG.TIMEZONE, "yyyyMMdd");
-}
-
-function formatIcsDateTimeUtc_(d) {
-  return Utilities.formatDate(d, "UTC", "yyyyMMdd'T'HHmmss'Z'");
-}
-
-function escapeIcsText_(s) {
-  return String(s || "")
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,");
 }
 
 function sendPrettyChangeEmail_(dateKey, changes) {
