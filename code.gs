@@ -480,6 +480,7 @@ function sendMonthlyScheduleReminder_() {
 
   const H = headerIndex_(data[0]);
   const roles = getRoleColumns_();
+  const rosterMaps = buildRosterMaps_(ss);
 
   const now = new Date(Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd") + "T00:00:00");
   const nextMonth = new Date(now);
@@ -518,14 +519,19 @@ function sendMonthlyScheduleReminder_() {
       `;
     }).join("");
 
+    const displayName = rosterMaps.emailToName.get(email) || "there";
     const html = buildPrettyEmail_({
       title: "Your Schedule for Next Month",
       subtitle: monthLabel,
       bodyHtml: `
         <div style="margin:0 0 10px 0;">
-          Here are your scheduled dates for next month.
+          Hi ${escapeHtml_(displayName)},<br/>
+          Thank you for serving. Here is your schedule for next month:
         </div>
         ${items}
+        <div style="margin:12px 0 0 0;color:#475569;">
+          If anything needs to change, just reply to this email.
+        </div>
       `,
     });
 
@@ -1509,7 +1515,7 @@ function buildPrettyEmail_({ title, subtitle, bodyHtml }) {
   const brandBlock = CONFIG.SHOW_LOGO
     ? `
       <img src="${CONFIG.LOGO_URL}" alt="${escapeHtml_(CONFIG.CHURCH_NAME)}"
-        style="height:22px;width:auto;display:block;margin:0 0 8px 0;" />
+        style="height:36px;width:auto;display:block;margin:0 0 10px 0;" />
       <div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#64748b;">
         ${escapeHtml_(CONFIG.CHURCH_NAME)}
       </div>
