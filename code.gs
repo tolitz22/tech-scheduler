@@ -36,6 +36,7 @@ const CONFIG = {
   // batch + speed
   BATCH_SUNDAYS: 10,
   AUTO_BATCH_EVERY_MINUTES: 1,
+  RSVP_SYNC_EVERY_MINUTES: 30,
 
   // branding
   CHURCH_NAME: "Scripture Alone Baptist Church",
@@ -65,7 +66,14 @@ const MONTH_SHEETS = [
 // E: Audio Email (hidden)
 // F: Livestream Email (hidden)
 // G: PPT Email (hidden)
-const MONTH_HEADERS = ["Date", "Audio", "Livestream", "PPT", "Audio Email", "Livestream Email", "PPT Email"];
+// H: Audio RSVP
+// I: Livestream RSVP
+// J: PPT RSVP
+const MONTH_HEADERS = [
+  "Date", "Audio", "Livestream", "PPT",
+  "Audio Email", "Livestream Email", "PPT Email",
+  "Audio RSVP", "Livestream RSVP", "PPT RSVP",
+];
 
 // =====================
 // PENDING CONFIRM STATE
@@ -96,6 +104,10 @@ function onOpen() {
     .addItem("Confirm & Send Emails", "openConfirmSendSidebar")
     .addItem("Cancel Pending Change", "cancelPendingChange")
     .addSeparator()
+    .addItem("Setup RSVP Sync (ICS)", "setupRsvpSyncTrigger")
+    .addItem("Sync RSVPs Now", "syncRsvpStatuses")
+    .addItem("Fix Monthly RSVP Columns", "fixMonthlyRsvpColumns")
+    .addSeparator()
     .addItem("Send Saturday Reminder", "sendSaturdayReminder")
     .addItem("Setup Saturday 5PM Trigger", "setupSaturday5pmTrigger")
     .addToUi();
@@ -105,6 +117,7 @@ function onOpen() {
 function install() {
   setupAutoSyncOnEdit();
   setupMonthlyEditSyncOptionB();
+  setupRsvpSyncTrigger();
   SpreadsheetApp.getUi().alert("Installed triggers. Monthly changes now require Confirm & Send Emails.");
 }
 
@@ -263,6 +276,155 @@ function syncScheduleChanges() {
 }
 
 // =====================
+// RSVP SYNC (ICS responses)
+// =====================
+function setupRsvpSyncTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === "syncRsvpStatuses")
+    .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger("syncRsvpStatuses")
+    .timeBased()
+    .everyMinutes(CONFIG.RSVP_SYNC_EVERY_MINUTES)
+    .create();
+
+  SpreadsheetApp.getUi().alert("RSVP sync trigger installed (ICS responses).");
+}
+
+function syncRsvpStatuses() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return;
+
+  try {
+    const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+    const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+    if (!schedule) throw new Error(`Missing sheet: ${CONFIG.SCHEDULE_SHEET_NAME}`);
+
+    ensureScheduleHeaders_(schedule);
+
+    const header = schedule.getRange(1, 1, 1, schedule.getLastColumn()).getValues()[0];
+    const H = headerIndex_(header);
+    const required = [
+      "Date", "Event Id",
+      "Audio", "LiveStream", "PPT",
+      "Audio RSVP", "LiveStream RSVP", "PPT RSVP",
+    ];
+    required.forEach(k => {
+      if (H[k] == null) throw new Error(`Missing column in Schedule: ${k}`);
+    });
+
+    const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
+    const lastRow = schedule.getLastRow();
+    for (let r = 2; r <= lastRow; r++) {
+      const dateKey = normalizeDateKey_(schedule.getRange(r, H["Date"] + 1).getValue());
+      if (!dateKey) continue;
+
+      const eventId = String(schedule.getRange(r, H["Event Id"] + 1).getValue() || "").trim();
+      if (!eventId) continue;
+
+      const event = safeGetEventById_(cal, eventId);
+      if (!event) continue;
+
+      const emailA = String(schedule.getRange(r, H["Audio"] + 1).getValue() || "").trim();
+      const emailL = String(schedule.getRange(r, H["LiveStream"] + 1).getValue() || "").trim();
+      const emailP = String(schedule.getRange(r, H["PPT"] + 1).getValue() || "").trim();
+
+      const newA = getRsvpForEmail_(event, emailA);
+      const newL = getRsvpForEmail_(event, emailL);
+      const newP = getRsvpForEmail_(event, emailP);
+
+      const curA = String(schedule.getRange(r, H["Audio RSVP"] + 1).getValue() || "").trim();
+      const curL = String(schedule.getRange(r, H["LiveStream RSVP"] + 1).getValue() || "").trim();
+      const curP = String(schedule.getRange(r, H["PPT RSVP"] + 1).getValue() || "").trim();
+
+      if (newA !== curA) schedule.getRange(r, H["Audio RSVP"] + 1).setValue(newA);
+      if (newL !== curL) schedule.getRange(r, H["LiveStream RSVP"] + 1).setValue(newL);
+      if (newP !== curP) schedule.getRange(r, H["PPT RSVP"] + 1).setValue(newP);
+
+      updateMonthlyRsvpForDate_(ss, dateKey, { Audio: newA, LiveStream: newL, PPT: newP });
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function fixMonthlyRsvpColumns() {
+  const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+  MONTH_SHEETS.forEach(sheetName => {
+    const sh = ss.getSheetByName(sheetName);
+    if (!sh) return;
+    ensureMonthHeadersOptionB_(sh);
+    applyPrettyMonthFormattingOptionB_(sh);
+  });
+  SpreadsheetApp.getUi().alert("Monthly RSVP columns fixed/visible.");
+}
+
+function safeGetEventById_(cal, eventId) {
+  try {
+    return cal.getEventById(eventId);
+  } catch (_) {
+    return null;
+  }
+}
+
+function getRsvpForEmail_(event, email) {
+  if (!email) return "";
+  const target = String(email).trim().toLowerCase();
+  const guest = event.getGuestList().find(g => String(g.getEmail() || "").trim().toLowerCase() === target);
+  if (!guest) return "";
+  return normalizeGuestStatus_(guest.getGuestStatus());
+}
+
+function normalizeGuestStatus_(status) {
+  if (status === CalendarApp.GuestStatus.YES) return "Yes";
+  if (status === CalendarApp.GuestStatus.NO) return "No";
+  if (status === CalendarApp.GuestStatus.MAYBE) return "Maybe";
+  if (status === CalendarApp.GuestStatus.INVITED) return "Invited";
+  return "";
+}
+
+function updateMonthlyRsvpForDate_(ss, dateKey, rsvpByRole) {
+  if (!dateKey) return;
+  const monthKey = dateKey.slice(0, 7);
+  const sheetName = monthNameFromKey_(monthKey);
+  const sh = ss.getSheetByName(sheetName);
+  if (!sh) return;
+
+  ensureMonthHeadersOptionB_(sh);
+  const row = findRowByDateKeyInMonthSheet_(sh, dateKey);
+  if (!row) return;
+
+  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const H = headerIndex_(header);
+
+  const roleToCol = {
+    Audio: "Audio RSVP",
+    LiveStream: "Livestream RSVP",
+    PPT: "PPT RSVP",
+  };
+
+  Object.keys(roleToCol).forEach(role => {
+    const colName = roleToCol[role];
+    const colIdx = H[colName];
+    if (colIdx == null) return;
+    const newVal = rsvpByRole[role] || "";
+    const cell = sh.getRange(row, colIdx + 1);
+    const curVal = String(cell.getValue() || "").trim();
+    if (newVal !== curVal) cell.setValue(newVal);
+  });
+}
+
+function findRowByDateKeyInMonthSheet_(sh, dateKey) {
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return null;
+  for (let r = 2; r <= lastRow; r++) {
+    const dateVal = sh.getRange(r, 1).getValue();
+    if (normalizeDateKey_(dateVal) === dateKey) return r;
+  }
+  return null;
+}
+
+// =====================
 // AUTO-SYNC ON EDIT (Schedule)
 // =====================
 function setupAutoSyncOnEdit() {
@@ -416,9 +578,23 @@ function sendSaturdayReminder() {
   const nextSunday = getNextSunday_(new Date(), CONFIG.TIMEZONE);
   const dateKey = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "yyyy-MM-dd");
   const pretty = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "EEEE, MMM d, yyyy");
+  const cal = getOrCreateCalendar_(CONFIG.CALENDAR_NAME);
 
   for (let r = 1; r < data.length; r++) {
     if (normalizeDateKey_(data[r][H["Date"]]) !== dateKey) continue;
+
+    ensureCalendarEventForScheduleRow_(sh, r + 1);
+    const eventId = String(data[r][H["Event Id"]] || "").trim();
+    if (!eventId) return;
+
+    const event = cal.getEventById(eventId);
+    if (!event) return;
+
+    event.setDescription(buildSundayDescription_(dateKey, {
+      Audio: data[r][H["Audio"]],
+      LiveStream: data[r][H["LiveStream"]],
+      PPT: data[r][H["PPT"]],
+    }));
 
     const rolesByEmail = new Map();
     addRole_(rolesByEmail, data[r][H["Audio"]], "Audio");
@@ -428,9 +604,10 @@ function sendSaturdayReminder() {
     for (const [email, roles] of rolesByEmail) {
       const to = TEST_EMAIL_ONLY || email;
       const subject = `Sunday Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
-      GmailApp.sendEmail(to, subject, "Please view this email in HTML.", {
-        htmlBody: buildPrettyReminderEmail_({ prettyDate: pretty, roles }),
-      });
+      const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles });
+      const summary = `Tech Duty — Your role: ${roles.join(", ")}`;
+      ensureGuestOnEvent_(event, to);
+      sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event, summaryOverride: summary });
     }
     break;
   }
@@ -580,8 +757,8 @@ function applyMonthlyDropdownsOptionB() {
     const lastRow = sh.getLastRow();
     if (lastRow < 2) return;
 
-    // Write name lists into hidden columns J/K/L (sources)
-    const baseCol = 10; // J
+    // Write name lists into hidden columns after the RSVP columns (sources)
+    const baseCol = sh.getLastColumn() + 1;
     sh.getRange(1, baseCol).setValue("_dropdown_sources_");
     sh.getRange(2, baseCol, Math.max(lastRow, 60), 3).clearContent();
 
@@ -910,7 +1087,14 @@ function buildOneMonthSheetOptionB_(ss, sheetName, monthKey, scheduleMap, emailT
 
   const rows = sundays.map(d => {
     const dateKey = Utilities.formatDate(d, CONFIG.TIMEZONE, "yyyy-MM-dd");
-    const entry = scheduleMap.get(dateKey) || { Audio: "", LiveStream: "", PPT: "" };
+    const entry = scheduleMap.get(dateKey) || {
+      Audio: "",
+      LiveStream: "",
+      PPT: "",
+      AudioRsvp: "",
+      LiveStreamRsvp: "",
+      PptRsvp: "",
+    };
 
     const aEmail = entry.Audio || "";
     const lEmail = entry.LiveStream || "";
@@ -924,6 +1108,9 @@ function buildOneMonthSheetOptionB_(ss, sheetName, monthKey, scheduleMap, emailT
       aEmail,
       lEmail,
       pEmail,
+      entry.AudioRsvp || "",
+      entry.LiveStreamRsvp || "",
+      entry.PptRsvp || "",
     ];
   });
 
@@ -948,7 +1135,14 @@ function syncOneMonthSheetOptionB_(sh, scheduleMap, emailToName) {
     const dateKey = normalizeDateKey_(dateVal);
     if (!dateKey) continue;
 
-    const entry = scheduleMap.get(dateKey) || { Audio: "", LiveStream: "", PPT: "" };
+    const entry = scheduleMap.get(dateKey) || {
+      Audio: "",
+      LiveStream: "",
+      PPT: "",
+      AudioRsvp: "",
+      LiveStreamRsvp: "",
+      PptRsvp: "",
+    };
 
     const aEmail = entry.Audio || "";
     const lEmail = entry.LiveStream || "";
@@ -963,6 +1157,11 @@ function syncOneMonthSheetOptionB_(sh, scheduleMap, emailToName) {
     sh.getRange(r, 5).setValue(aEmail);
     sh.getRange(r, 6).setValue(lEmail);
     sh.getRange(r, 7).setValue(pEmail);
+
+    // RSVP status
+    sh.getRange(r, 8).setValue(entry.AudioRsvp || "");
+    sh.getRange(r, 9).setValue(entry.LiveStreamRsvp || "");
+    sh.getRange(r, 10).setValue(entry.PptRsvp || "");
   }
 
   sh.getRange(2, 1, lastRow - 1, 1).setNumberFormat(CONFIG.MONTH_DATE_FORMAT);
@@ -970,14 +1169,28 @@ function syncOneMonthSheetOptionB_(sh, scheduleMap, emailToName) {
 }
 
 function ensureMonthHeadersOptionB_(sh) {
-  const firstRow = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), MONTH_HEADERS.length)).getValues()[0];
-  const H = headerIndex_(firstRow);
+  if (sh.getLastColumn() < MONTH_HEADERS.length) {
+    sh.insertColumnsAfter(sh.getLastColumn(), MONTH_HEADERS.length - sh.getLastColumn());
+  }
 
+  const firstRow = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), MONTH_HEADERS.length)).getValues()[0];
+  const isBlank = firstRow.every(v => String(v || "").trim() === "");
+  if (isBlank) {
+    sh.getRange(1, 1, 1, MONTH_HEADERS.length).setValues([MONTH_HEADERS]);
+    return;
+  }
+
+  const H = headerIndex_(firstRow);
   const hasDate = H["Date"] != null;
   const hasAudioEmail = H["Audio Email"] != null;
 
   if (!hasDate || !hasAudioEmail) {
-    sh.clear();
+    sh.getRange(1, 1, 1, MONTH_HEADERS.length).setValues([MONTH_HEADERS]);
+    return;
+  }
+
+  const hasAll = MONTH_HEADERS.every(h => H[h] != null);
+  if (!hasAll) {
     sh.getRange(1, 1, 1, MONTH_HEADERS.length).setValues([MONTH_HEADERS]);
   }
 }
@@ -989,8 +1202,11 @@ function applyPrettyMonthFormattingOptionB_(sh) {
   sh.setColumnWidth(2, 220);
   sh.setColumnWidth(3, 220);
   sh.setColumnWidth(4, 220);
+  sh.setColumnWidth(8, 120);
+  sh.setColumnWidth(9, 120);
+  sh.setColumnWidth(10, 120);
 
-  const header = sh.getRange(1, 1, 1, 4);
+  const header = sh.getRange(1, 1, 1, MONTH_HEADERS.length);
   header
     .setFontWeight("bold")
     .setHorizontalAlignment("center")
@@ -999,19 +1215,20 @@ function applyPrettyMonthFormattingOptionB_(sh) {
 
   const lastRow = sh.getLastRow();
   if (lastRow >= 2) {
-    const body = sh.getRange(2, 1, lastRow - 1, 4);
+    const body = sh.getRange(2, 1, lastRow - 1, MONTH_HEADERS.length);
     body.setVerticalAlignment("middle");
     body.setWrap(true);
     body.setBorder(true, true, true, true, true, true);
 
     for (let r = 2; r <= lastRow; r++) {
-      sh.getRange(r, 1, 1, 4).setBackground((r % 2) === 0 ? "#ffffff" : "#fbfdff");
+      sh.getRange(r, 1, 1, MONTH_HEADERS.length).setBackground((r % 2) === 0 ? "#ffffff" : "#fbfdff");
     }
     sh.getRange(2, 1, lastRow - 1, 1).setFontWeight("bold");
   }
 
   sh.setFrozenRows(1);
   sh.hideColumns(5, 3); // hide emails
+  sh.showColumns(8, 3); // ensure RSVP columns visible
 }
 
 // ---------------------
@@ -1157,7 +1374,8 @@ function getScheduleHeaders_() {
     "Date", "Audio", "LiveStream", "PPT",
     "Event Id", "Calendar Name",
     "Last Synced Audio", "Last Synced LiveStream", "Last Synced PPT",
-    "Changed At", "Notified At"
+    "Changed At", "Notified At",
+    "Audio RSVP", "LiveStream RSVP", "PPT RSVP"
   ];
 }
 
@@ -1176,6 +1394,15 @@ function ensureScheduleHeaders_(scheduleSheet) {
   if (isBlank) {
     scheduleSheet.clear();
     scheduleSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return;
+  }
+
+  const H = headerIndex_(firstRow);
+  const missing = headers.filter(h => H[h] == null);
+  if (missing.length) {
+    const newHeaders = firstRow.slice();
+    missing.forEach(h => newHeaders.push(h));
+    scheduleSheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
   }
 }
 
@@ -1363,6 +1590,9 @@ function buildScheduleMap_(scheduleSheet) {
       Audio: String(data[r][H["Audio"]] || "").trim(),
       LiveStream: String(data[r][H["LiveStream"]] || "").trim(),
       PPT: String(data[r][H["PPT"]] || "").trim(),
+      AudioRsvp: H["Audio RSVP"] != null ? String(data[r][H["Audio RSVP"]] || "").trim() : "",
+      LiveStreamRsvp: H["LiveStream RSVP"] != null ? String(data[r][H["LiveStream RSVP"]] || "").trim() : "",
+      PptRsvp: H["PPT RSVP"] != null ? String(data[r][H["PPT RSVP"]] || "").trim() : "",
     });
   }
   return map;
@@ -1616,6 +1846,92 @@ function buildPrettyReminderEmail_({ prettyDate, roles }) {
       </div>
     `,
   });
+}
+
+function sendCalendarInviteEmail_({ toEmail, subject, htmlBody, event, summaryOverride }) {
+  const ics = buildIcsInvite_(event, toEmail, summaryOverride);
+  GmailApp.sendEmail(toEmail, subject, "Please view this email in HTML.", {
+    htmlBody,
+    attachments: [
+      {
+        fileName: "invite.ics",
+        mimeType: "text/calendar; charset=UTF-8; method=REQUEST",
+        content: ics,
+      },
+    ],
+  });
+}
+
+function buildIcsInvite_(event, attendeeEmail, summaryOverride) {
+  const now = new Date();
+  const uid = event.getId();
+  const summary = escapeIcsText_(summaryOverride || event.getTitle() || "Tech Duty");
+  const description = escapeIcsText_(event.getDescription() || "");
+  const location = escapeIcsText_(event.getLocation() || "");
+  const attendee = escapeIcsText_(attendeeEmail);
+
+  const dtStamp = formatIcsDateTimeUtc_(now);
+
+  let dtStart = "";
+  let dtEnd = "";
+  if (event.isAllDayEvent()) {
+    dtStart = `DTSTART;VALUE=DATE:${formatIcsDate_(event.getStartTime())}`;
+    dtEnd = `DTEND;VALUE=DATE:${formatIcsDate_(event.getEndTime())}`;
+  } else {
+    dtStart = `DTSTART:${formatIcsDateTimeUtc_(event.getStartTime())}`;
+    dtEnd = `DTEND:${formatIcsDateTimeUtc_(event.getEndTime())}`;
+  }
+
+  const organizerEmail = Session.getActiveUser().getEmail() || "";
+  const organizerLine = organizerEmail
+    ? `ORGANIZER;CN=${escapeIcsText_(CONFIG.TECH_TEAM_NAME)}:MAILTO:${escapeIcsText_(organizerEmail)}`
+    : "";
+
+  return [
+    "BEGIN:VCALENDAR",
+    "PRODID:-//Church Tech Scheduler//EN",
+    "VERSION:2.0",
+    "CALSCALE:GREGORIAN",
+    "METHOD:REQUEST",
+    "BEGIN:VEVENT",
+    `UID:${escapeIcsText_(uid)}`,
+    `DTSTAMP:${dtStamp}`,
+    dtStart,
+    dtEnd,
+    `SUMMARY:${summary}`,
+    description ? `DESCRIPTION:${description}` : "",
+    location ? `LOCATION:${location}` : "",
+    organizerLine,
+    `ATTENDEE;CN=${attendee};ROLE=REQ-PARTICIPANT;RSVP=TRUE:MAILTO:${attendee}`,
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].filter(Boolean).join("\r\n");
+}
+
+function ensureGuestOnEvent_(event, email) {
+  if (!email) return;
+  const exists = event.getGuestList().some(g => String(g.getEmail() || "").trim() === email);
+  if (!exists) {
+    try {
+      event.addGuest(email);
+    } catch (_) {}
+  }
+}
+
+function formatIcsDate_(d) {
+  return Utilities.formatDate(d, CONFIG.TIMEZONE, "yyyyMMdd");
+}
+
+function formatIcsDateTimeUtc_(d) {
+  return Utilities.formatDate(d, "UTC", "yyyyMMdd'T'HHmmss'Z'");
+}
+
+function escapeIcsText_(s) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,");
 }
 
 function sendPrettyChangeEmail_(dateKey, changes) {
