@@ -744,6 +744,8 @@ function onScheduleEdit(e) {
       const col = e.range.getColumn();
 
       const editedRole = roleColumns.find(r => H[r] + 1 === col);
+      const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+
       if (editedRole) {
         const email = String(e.range.getValue() || "").trim();
         const reason = validateAssignmentForScheduleRow_(sh, row, editedRole, email, {
@@ -756,8 +758,23 @@ function onScheduleEdit(e) {
           (e.source || SpreadsheetApp.getActive()).toast(reason, "Tech Scheduler", 8);
           return;
         }
+
+        const oldVal = String(e.oldValue || "").trim();
+        const newVal = String(e.range.getValue() || "").trim();
+        if (oldVal !== newVal) {
+          const dateKey = normalizeDateKey_(sh.getRange(row, H["Date"] + 1).getValue());
+          props.setProperty("SCHED_EDIT_GUARD", "1");
+          props.setProperty("MONTH_EDIT_GUARD", "1");
+          try {
+            resetScheduleRsvpForRole_(sh, row, editedRole);
+            resetMonthlyRsvpForRoleByDate_(ss, dateKey, editedRole);
+          } finally {
+            props.deleteProperty("SCHED_EDIT_GUARD");
+            props.deleteProperty("MONTH_EDIT_GUARD");
+          }
+        }
       }
-      const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+
       syncScheduleChangesForRow_(ss, sh, row);
     } finally {
       lock.releaseLock();
@@ -1094,7 +1111,9 @@ function applyMonthlyDropdownsOptionB() {
     applyPrettyMonthFormattingOptionB_(sh);
   });
 
-  SpreadsheetApp.getUi().alert("Monthly dropdowns applied .");
+  try {
+    SpreadsheetApp.getUi().alert("Monthly dropdowns applied .");
+  } catch (_) {}
 }
 
 // 3) Sync month sheets from Schedule
@@ -1195,6 +1214,7 @@ function onMonthlyEditOptionB(e) {
       if (pickedEmail) {
         const reason = validateAssignmentForScheduleRow_(schedule, scheduleRow, roleLabel, pickedEmail, {
           enforceConsecutive: false,
+          ignoreMaxPerMonth: true,
         });
         if (reason) {
           props.setProperty("MONTH_EDIT_GUARD", "1");
@@ -1215,6 +1235,10 @@ function onMonthlyEditOptionB(e) {
 
       // Update Schedule (source of truth)
       schedule.getRange(scheduleRow, H[roleLabel] + 1).setValue(pickedEmail);
+
+      // Reset RSVP for this role (monthly + schedule) to avoid stale status/color
+      resetMonthlyRsvpForRole_(sh, row, roleLabel);
+      resetScheduleRsvpForRole_(schedule, scheduleRow, roleLabel);
 
       // Save pending change for confirmation UX
       addPendingChange_({
@@ -1245,6 +1269,55 @@ function onMonthlyEditOptionB(e) {
     } catch (_) {}
     console.error("onMonthlyEditOptionB error:", err);
   }
+}
+
+function resetMonthlyRsvpForRole_(monthSheet, row, roleLabel) {
+  const header = monthSheet.getRange(1, 1, 1, monthSheet.getLastColumn()).getValues()[0];
+  const H = headerIndex_(header);
+
+  const roleCol =
+    roleLabel === "Audio" ? 2 :
+    roleLabel === "LiveStream" ? 3 :
+    roleLabel === "PPT" ? 4 :
+    null;
+  const rsvpColName =
+    roleLabel === "Audio" ? "Audio RSVP" :
+    roleLabel === "LiveStream" ? "Livestream RSVP" :
+    roleLabel === "PPT" ? "PPT RSVP" :
+    "";
+  const rsvpCol = rsvpColName && H[rsvpColName] != null ? H[rsvpColName] + 1 : null;
+
+  if (rsvpCol) {
+    monthSheet.getRange(row, rsvpCol).setValue("");
+    monthSheet.getRange(row, rsvpCol).setBackground(null).setFontColor(null);
+  }
+  if (roleCol) {
+    monthSheet.getRange(row, roleCol).setBackground(null).setFontColor(null);
+  }
+}
+
+function resetScheduleRsvpForRole_(scheduleSheet, row, roleLabel) {
+  const header = scheduleSheet.getRange(1, 1, 1, scheduleSheet.getLastColumn()).getValues()[0];
+  const H = headerIndex_(header);
+  const rsvpColName =
+    roleLabel === "Audio" ? "Audio RSVP" :
+    roleLabel === "LiveStream" ? "LiveStream RSVP" :
+    roleLabel === "PPT" ? "PPT RSVP" :
+    "";
+  if (!rsvpColName || H[rsvpColName] == null) return;
+  scheduleSheet.getRange(row, H[rsvpColName] + 1).setValue("");
+}
+
+function resetMonthlyRsvpForRoleByDate_(ss, dateKey, roleLabel) {
+  if (!dateKey) return;
+  const monthKey = dateKey.slice(0, 7);
+  const sheetName = monthNameFromKey_(monthKey);
+  const sh = ss.getSheetByName(sheetName);
+  if (!sh) return;
+  ensureMonthHeadersOptionB_(sh);
+  const row = findRowByDateKeyInMonthSheet_(sh, dateKey);
+  if (!row) return;
+  resetMonthlyRsvpForRole_(sh, row, roleLabel);
 }
 
 // =====================
@@ -1530,11 +1603,67 @@ function applyPrettyMonthFormattingOptionB_(sh) {
   sh.setFrozenRows(1);
   sh.hideColumns(5, 3);
   sh.showColumns(8, 3);
+
+  if (lastRow < 2) return;
+
+  const audioRoleRange = sh.getRange(2, 2, lastRow - 1, 1);
+  const liveRoleRange = sh.getRange(2, 3, lastRow - 1, 1);
+  const pptRoleRange = sh.getRange(2, 4, lastRow - 1, 1);
+  const audioRsvpRange = sh.getRange(2, 8, lastRow - 1, 1);
+  const liveRsvpRange = sh.getRange(2, 9, lastRow - 1, 1);
+  const pptRsvpRange = sh.getRange(2, 10, lastRow - 1, 1);
+
+  const greenBg = "#dcfce7";
+  const greenText = "#166534";
+  const redBg = "#fee2e2";
+  const redText = "#991b1b";
+
+  const rules = [
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$H2="Yes"')
+      .setBackground(greenBg)
+      .setFontColor(greenText)
+      .setRanges([audioRsvpRange, audioRoleRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$H2="No"')
+      .setBackground(redBg)
+      .setFontColor(redText)
+      .setRanges([audioRsvpRange, audioRoleRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$I2="Yes"')
+      .setBackground(greenBg)
+      .setFontColor(greenText)
+      .setRanges([liveRsvpRange, liveRoleRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$I2="No"')
+      .setBackground(redBg)
+      .setFontColor(redText)
+      .setRanges([liveRsvpRange, liveRoleRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$J2="Yes"')
+      .setBackground(greenBg)
+      .setFontColor(greenText)
+      .setRanges([pptRsvpRange, pptRoleRange])
+      .build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=$J2="No"')
+      .setBackground(redBg)
+      .setFontColor(redText)
+      .setRanges([pptRsvpRange, pptRoleRange])
+      .build(),
+  ];
+
+  sh.setConditionalFormatRules(rules);
 }
 
 // =====================
 // Roster maps (Name <-> Email) + eligible names per ministry
 // Roster headers required: Name | Email | Audio | LiveStream | PPT
+// If no role is TRUE, the person is treated as backup (dropdowns only).
 // =====================
 function buildRosterMaps_(ss) {
   const sh = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME);
@@ -1564,9 +1693,14 @@ function buildRosterMaps_(ss) {
     nameToEmail.set(name, email);
     emailToName.set(email, name);
 
-    if (isTruthy_(data[r][H["Audio"]])) namesByRole.Audio.push(name);
-    if (isTruthy_(data[r][H["LiveStream"]])) namesByRole.LiveStream.push(name);
-    if (isTruthy_(data[r][H["PPT"]])) namesByRole.PPT.push(name);
+    const isAudio = isTruthy_(data[r][H["Audio"]]);
+    const isLive = isTruthy_(data[r][H["LiveStream"]]);
+    const isPpt = isTruthy_(data[r][H["PPT"]]);
+    const isBackup = !isAudio && !isLive && !isPpt;
+
+    if (isAudio || isBackup) namesByRole.Audio.push(name);
+    if (isLive || isBackup) namesByRole.LiveStream.push(name);
+    if (isPpt || isBackup) namesByRole.PPT.push(name);
   }
 
   Object.keys(namesByRole).forEach(k => {
@@ -2526,10 +2660,12 @@ function validateAssignmentForScheduleRow_(scheduleSheet, row, roleLabel, email,
     }
   }
 
-  const monthKey = dateKey.slice(0, 7);
-  const currentCount = countEmailAssignmentsInMonth_(scheduleSheet, target, monthKey);
-  if (currentCount >= CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY) {
-    return `That person already has ${CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY} assignment(s) this month.`;
+  if (!opts.ignoreMaxPerMonth) {
+    const monthKey = dateKey.slice(0, 7);
+    const currentCount = countEmailAssignmentsInMonth_(scheduleSheet, target, monthKey);
+    if (currentCount >= CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY) {
+      return `That person already has ${CONFIG.MAX_ASSIGNMENTS_PER_PERSON_PER_MONTH_PER_MINISTRY} assignment(s) this month.`;
+    }
   }
 
   if (opts.enforceConsecutive) {
