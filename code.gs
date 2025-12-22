@@ -289,14 +289,12 @@ function applySubRsvpUpdate_({ action, role, dateKey, email, eventId }) {
 
   // Optional: notify coordinator when NO
   if (action === "NO") {
-    const coord = Session.getActiveUser().getEmail();
-    if (coord) {
-      GmailApp.sendEmail(
-        coord,
-        `[Tech Sub] NO - ${role} - ${dateKey}`,
-        `${email} declined to cover ${role} on ${dateKey}. Please coordinate in the Tech Group chat.`
-      );
-    }
+    const notifyEmail = TEST_EMAIL_ONLY || "johncyrilflaviano@gmail.com";
+    GmailApp.sendEmail(
+      notifyEmail,
+      `[Tech Sub] NO - ${role} - ${dateKey}`,
+      `${email} declined to cover ${role} on ${dateKey}. Please coordinate in the Tech Group chat.`
+    );
   }
 }
 
@@ -1602,7 +1600,7 @@ function applyPrettyMonthFormattingOptionB_(sh) {
 
   sh.setFrozenRows(1);
   sh.hideColumns(5, 3);
-  sh.showColumns(8, 3);
+  sh.hideColumns(8, 3);
 
   if (lastRow < 2) return;
 
