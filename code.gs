@@ -31,6 +31,7 @@
 // CONFIG
 // =====================
 const TEST_EMAIL_ONLY = "tubigangelito981@gmail.com"; // set null when LIVE
+const TEST_SMS_ONLY = "639157213563"; // set to "639XXXXXXXXX" to force SMS to one number when testing
 
 const CONFIG = {
   TIMEZONE: "Asia/Manila",
@@ -59,6 +60,14 @@ const CONFIG = {
   LOGO_URL:
     "https://scontent.fcrk1-4.fna.fbcdn.net/v/t39.30808-6/581931274_1143165951345548_7970612996274936410_n.jpg?_nc_cat=109&ccb=1-7&_nc_sid=6ee11a&_nc_eui2=AeE-BXRETeSyNlfd6wkbF8AebLI5KjsVKv5ssjkqOxUq_p1zeegMthA0fPsa1h9ASXPjkOKEsmRG66ukeyrTr17C&_nc_ohc=Yypu83H4jmkQ7kNvwEX9Mf_&_nc_oc=AdlfRmpC8r7svvlS32DVqmfIP9t1kLBGNr5COZcXy4QqY9NYDPDfduve81j1PfuVjKA&_nc_zt=23&_nc_ht=scontent.fcrk1-4.fna&_nc_gid=o1INtoXGXhSnC9pvLMQh6A&oh=00_Aflhn3UZGn6KXluKDdnP8CwpwegDi4KSYE6X6VEbgdw-9g&oe=69498F4A",
   SHOW_LOGO: true,
+
+  // SMS (PhilSMS)
+  // Store your token in Script Properties: PHILSMS_TOKEN
+  SMS_ENABLED: true,
+  SMS_API_BASE: "https://dashboard.philsms.com/api/v3",
+  SMS_SENDER_ID: "PhilSMS",
+  SMS_TYPE: "plain",
+  SMS_TOKEN: "", // optional fallback if Script Properties are not set
 
   // monthly sheet date format
   MONTH_DATE_FORMAT: "ddd, mmm d, yyyy",
@@ -910,9 +919,15 @@ function sendSaturdayReminder() {
       const displayName = rosterMaps.emailToName.get(String(email || "").trim().toLowerCase()) || email;
       const subject = `Sunday Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
       const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles, displayName });
-      const summary = `Tech Duty — Your role: ${roles.join(", ")}`;
+      const summary = `Tech Duty - Your role: ${roles.join(", ")}`;
       ensureGuestOnEvent_(event, to);
       sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event, summaryOverride: summary });
+
+      const mobile = rosterMaps.emailToMobile.get(String(email || "").trim().toLowerCase()) || "";
+      if (mobile) {
+        const sms = buildSmsSaturdayReminder_({ prettyDate: pretty, roles });
+        sendSms_({ recipient: mobile, message: sms });
+      }
     }
     break;
   }
@@ -1042,6 +1057,12 @@ function sendMonthlyScheduleReminder_() {
 
     const subject = `Next Month Schedule | ${CONFIG.TECH_TEAM_NAME}`;
     GmailApp.sendEmail(TEST_EMAIL_ONLY || email, subject, "Please view this email in HTML.", { htmlBody: html });
+
+    const mobile = rosterMaps.emailToMobile.get(String(email || "").trim().toLowerCase()) || "";
+    if (mobile) {
+      const sms = buildSmsMonthlyReminder_({ monthLabel, count: dateKeys.length });
+      sendSms_({ recipient: mobile, message: sms });
+    }
   });
 }
 
@@ -1659,8 +1680,9 @@ function applyPrettyMonthFormattingOptionB_(sh) {
 }
 
 // =====================
-// Roster maps (Name <-> Email) + eligible names per ministry
+// Roster maps (Name <-> Email/Mobile) + eligible names per ministry
 // Roster headers required: Name | Email | Audio | LiveStream | PPT
+// Optional: Mobile (for SMS)
 // If no role is TRUE, the person is treated as backup (dropdowns only).
 // =====================
 function buildRosterMaps_(ss) {
@@ -1676,6 +1698,8 @@ function buildRosterMaps_(ss) {
 
   const nameToEmail = new Map();
   const emailToName = new Map();
+  const nameToMobile = new Map();
+  const emailToMobile = new Map();
 
   const namesByRole = {
     Audio: [],
@@ -1686,10 +1710,16 @@ function buildRosterMaps_(ss) {
   for (let r = 1; r < data.length; r++) {
     const name = String(data[r][H["Name"]] || "").trim();
     const email = String(data[r][H["Email"]] || "").trim().toLowerCase();
+    const mobileRaw = H["Mobile"] != null ? data[r][H["Mobile"]] : "";
+    const mobile = normalizePhone_(mobileRaw);
     if (!name || !email) continue;
 
     nameToEmail.set(name, email);
     emailToName.set(email, name);
+    if (mobile) {
+      nameToMobile.set(name, mobile);
+      emailToMobile.set(email, mobile);
+    }
 
     const isAudio = isTruthy_(data[r][H["Audio"]]);
     const isLive = isTruthy_(data[r][H["LiveStream"]]);
@@ -1705,7 +1735,7 @@ function buildRosterMaps_(ss) {
     namesByRole[k] = Array.from(new Set(namesByRole[k])).sort();
   });
 
-  return { nameToEmail, emailToName, namesByRole };
+  return { nameToEmail, emailToName, nameToMobile, emailToMobile, namesByRole };
 }
 
 function getNameFromEmail_(ss, email) {
@@ -2082,6 +2112,15 @@ function readRosterFromSheet_(ss, sheetName) {
   return roster;
 }
 
+function normalizePhone_(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("0") && digits.length === 11) return "63" + digits.slice(1);
+  if (digits.startsWith("63")) return digits;
+  if (digits.length === 10) return "63" + digits;
+  return digits;
+}
+
 function isTruthy_(v) {
   const s = String(v || "").trim().toLowerCase();
   return s === "true" || s === "yes" || s === "1" || s === "y";
@@ -2127,6 +2166,58 @@ function pickCandidate_({ roster, ministry, countsMap, maxPerMonth, avoidConsecu
   const min = candidates[0].count;
   const best = candidates.filter(x => x.count === min);
   return best[Math.floor(Math.random() * best.length)].email;
+}
+
+// =====================
+// SMS (PhilSMS)
+// =====================
+function getSmsToken_() {
+  return PropertiesService.getScriptProperties().getProperty("PHILSMS_TOKEN") || CONFIG.SMS_TOKEN;
+}
+
+function sendSms_({ recipient, message }) {
+  if (!CONFIG.SMS_ENABLED) return;
+  if (!recipient || !message) return;
+  if (TEST_EMAIL_ONLY && !TEST_SMS_ONLY) return;
+
+  const token = getSmsToken_();
+  if (!token) throw new Error("Missing PHILSMS_TOKEN in Script Properties.");
+
+  const finalRecipient = TEST_SMS_ONLY || recipient;
+  if (!finalRecipient) return;
+
+  const url = CONFIG.SMS_API_BASE.replace(/\/$/, "") + "/sms/send";
+  const payload = {
+    recipient: finalRecipient,
+    sender_id: CONFIG.SMS_SENDER_ID,
+    type: CONFIG.SMS_TYPE,
+    message,
+  };
+
+  const res = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: "Bearer " + token,
+      Accept: "application/json",
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  if (res.getResponseCode() >= 400) {
+    Logger.log("SMS send failed: " + res.getContentText());
+  }
+}
+
+function buildSmsSaturdayReminder_({ prettyDate, roles }) {
+  const roleText = Array.isArray(roles) ? roles.join(", ") : String(roles || "");
+  return `Hi! Thank you for serving. Reminder: tech duty tomorrow (${prettyDate}). Role: ${roleText}. - ${CONFIG.TECH_TEAM_NAME}`;
+}
+
+function buildSmsMonthlyReminder_({ monthLabel, count }) {
+  const n = Number(count || 0);
+  return `Hi! Thank you for serving. Your schedule for ${monthLabel} is ready (${n} assignment(s)). Check email for details. - ${CONFIG.TECH_TEAM_NAME}`;
 }
 
 // =====================
