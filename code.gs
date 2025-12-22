@@ -1293,6 +1293,16 @@ function onMonthlyEditOptionB(e) {
         "Tech Scheduler",
         8
       );
+      // Auto-open confirm sidebar after dropdown edits (installable onEdit only).
+      if (e && e.authMode === ScriptApp.AuthMode.FULL) {
+        try {
+          openConfirmSendSidebar();
+        } catch (uiErr) {
+          try {
+            ss.toast("Sidebar didn't open. Use Tech Scheduler > Confirm & Send Emails.", "Tech Scheduler", 6);
+          } catch (_) {}
+        }
+      }
     } finally {
       lock.releaseLock();
     }
