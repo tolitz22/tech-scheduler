@@ -68,6 +68,7 @@ const CONFIG = {
   SMS_SENDER_ID: "PhilSMS",
   SMS_TYPE: "plain",
   SMS_TOKEN: "", // optional fallback if Script Properties are not set
+  COORDINATOR_MOBILE: "639760446193", // optional: SMS number for Tech Sub NO alerts
 
   // monthly sheet date format
   MONTH_DATE_FORMAT: "ddd, mmm d, yyyy",
@@ -138,8 +139,8 @@ function onOpen() {
     .addItem("Setup RSVP Sync (ICS)", "setupRsvpSyncTrigger")
     .addItem("Sync RSVPs Now", "syncRsvpStatuses")    
     .addSeparator()
-    .addItem("Send Saturday Reminder", "sendSaturdayReminder")
-    .addItem("Setup Saturday 5PM Trigger", "setupSaturday5pmTrigger")
+    .addItem("Send Reminder Now", "sendSaturdayReminder")
+    .addItem("Setup Wednesday 7PM Trigger", "setupSaturday5pmTrigger")
     .addSeparator()
     .addItem("Show WebApp URL Help", "showWebAppHelp_")
     .addToUi();
@@ -304,6 +305,10 @@ function applySubRsvpUpdate_({ action, role, dateKey, email, eventId }) {
       `[Tech Sub] NO - ${role} - ${dateKey}`,
       `${email} declined to cover ${role} on ${dateKey}. Please coordinate in the Tech Group chat.`
     );
+    if (CONFIG.COORDINATOR_MOBILE) {
+      const sms = buildSmsTechSubNoNotify_({ role, dateKey, email });
+      sendSms_({ recipient: CONFIG.COORDINATOR_MOBILE, message: sms });
+    }
   }
 }
 
@@ -354,6 +359,11 @@ function sendPendingSubConfirmationIfAny_(ss, dateKey, role, newEmail) {
     prettyDate,
   });
   GmailApp.sendEmail(TEST_EMAIL_ONLY || personAEmail, "Tech Sub Confirmation", "Please view in HTML.", { htmlBody: confHtml });
+  const personAMobile = roster.emailToMobile.get(personAEmail) || "";
+  if (personAMobile) {
+    const sms = buildSmsTechSubConfirmation_({ personBName, role, prettyDate });
+    sendSms_({ recipient: personAMobile, message: sms });
+  }
 
   removePendingSubConfirmation_(dateKey, role, newEmail);
 }
@@ -862,7 +872,7 @@ function syncScheduleChangesForRow_(ss, sh, row) {
 }
 
 // =====================
-// SATURDAY REMINDER
+// WEEKLY REMINDER
 // =====================
 function setupSaturday5pmTrigger() {
   ScriptApp.getProjectTriggers()
@@ -871,11 +881,11 @@ function setupSaturday5pmTrigger() {
 
   ScriptApp.newTrigger("sendSaturdayReminder")
     .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.SATURDAY)
-    .atHour(17)
+    .onWeekDay(ScriptApp.WeekDay.WEDNESDAY)
+    .atHour(19)
     .create();
 
-  SpreadsheetApp.getUi().alert("Saturday 5PM reminder trigger installed.");
+  SpreadsheetApp.getUi().alert("Wednesday 7PM reminder trigger installed.");
 }
 
 function sendSaturdayReminder() {
@@ -1041,8 +1051,8 @@ function sendMonthlyScheduleReminder_() {
 
     const displayName = rosterMaps.emailToName.get(email) || "there";
     const html = buildPrettyEmail_({
-      title: "Your Schedule for Next Month",
-      subtitle: monthLabel,
+      title: `Your Volunteer Schedule for the Month of ${monthLabel}`,
+      subtitle: "",
       bodyHtml: `
         <div style="margin:0 0 10px 0;">
           Hi ${escapeHtml_(displayName)},<br/>
@@ -1051,6 +1061,10 @@ function sendMonthlyScheduleReminder_() {
         ${items}
         <div style="margin:12px 0 0 0;color:#475569;">
           Please tap Yes or No for each assignment above.
+        </div>
+        <div style="margin:12px 0 0 0;color:#475569;">
+          Please confirm your availability by clicking “Yes.” If you have a conflict, click “No” and kindly inform us via the Tech group chat as soon as possible.
+          Thank you for your continued service in our church’s tech ministry.
         </div>
       `,
     });
@@ -2212,12 +2226,31 @@ function sendSms_({ recipient, message }) {
 
 function buildSmsSaturdayReminder_({ prettyDate, roles }) {
   const roleText = Array.isArray(roles) ? roles.join(", ") : String(roles || "");
-  return `Hi! Thank you for serving. Reminder: tech duty tomorrow (${prettyDate}). Role: ${roleText}. - ${CONFIG.TECH_TEAM_NAME}`;
+  return `Tech Reminder: We appreciate your support. This Sunday (${prettyDate}) role: ${roleText}. - ${CONFIG.TECH_TEAM_NAME}`;
+}
+
+function buildSmsTechSubInvite_({ personAName, role, prettyDate }) {
+  return `Tech Sub Invite: We appreciate your support. ${personAName} asked you to cover ${role} on ${prettyDate}. Check email to respond. - ${CONFIG.TECH_TEAM_NAME}`;
+}
+
+function buildSmsTechSubConfirmation_({ personBName, role, prettyDate }) {
+  return `Tech Sub Confirmed: We appreciate your support. ${personBName} will cover ${role} on ${prettyDate}. - ${CONFIG.TECH_TEAM_NAME}`;
+}
+
+function buildSmsTechSubNoNotify_({ role, dateKey, email }) {
+  return `Tech Sub Declined: ${email} declined ${role} on ${dateKey}. - ${CONFIG.TECH_TEAM_NAME}`;
 }
 
 function buildSmsMonthlyReminder_({ monthLabel, count }) {
   const n = Number(count || 0);
-  return `Hi! Thank you for serving. Your schedule for ${monthLabel} is ready (${n} assignment(s)). Check email for details. - ${CONFIG.TECH_TEAM_NAME}`;
+  return (
+    `Good day!\n` +
+    `We're pleased to inform you that your ${monthLabel} tech schedule is available.\n` +
+    `You have ${n} assigned duty this month.\n\n` +
+    `Kindly check your email for the details.\n` +
+    `Thank you for your continued service.\n` +
+    `- ${CONFIG.TECH_TEAM_NAME}`
+  );
 }
 
 // =====================
@@ -2493,6 +2526,11 @@ function sendChangeEmailsSmart_(ss, dateKey, changes, eventId) {
       eventId,
     });
     GmailApp.sendEmail(TEST_EMAIL_ONLY || personBEmail, "Tech Sub Invite", "Please view in HTML.", { htmlBody: inviteHtml });
+    const personBMobile = roster.emailToMobile.get(personBEmail) || "";
+    if (personBMobile) {
+      const sms = buildSmsTechSubInvite_({ personAName, role: c.role, prettyDate });
+      sendSms_({ recipient: personBMobile, message: sms });
+    }
   });
 
   // For non-sub changes, generic schedule update to affected emails
