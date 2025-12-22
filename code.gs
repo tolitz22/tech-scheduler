@@ -72,14 +72,14 @@ const CONFIG = {
 };
 
 // =====================
-// MONTHLY SHEETS (Option B)
+// MONTHLY SHEETS 
 // =====================
 const MONTH_SHEETS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
 
-// Monthly Sheet Layout (Option B)
+// Monthly Sheet Layout 
 // A: Date (Date object, formatted)
 // B: Audio (NAME dropdown)
 // C: Livestream (NAME dropdown)
@@ -113,10 +113,10 @@ function onOpen() {
     .addItem("Start Auto Batch Scheduler", "startAutoBatchScheduler")
     .addSeparator()
     .addItem("Setup Auto-Sync on Schedule Edit", "setupAutoSyncOnEdit")
-    .addItem("Setup Monthly Edit Sync (Option B)", "setupMonthlyEditSyncOptionB")
+    .addItem("Setup Monthly Edit Sync ", "setupMonthlyEditSyncOptionB")
     .addSeparator()
-    .addItem("Generate Monthly Sheets (Option B)", "generateMonthlySheetsOptionB")
-    .addItem("Sync Monthly Sheets from Schedule (Option B)", "syncMonthlySheetsFromScheduleOptionB")
+    .addItem("Generate Monthly Sheets ", "generateMonthlySheetsOptionB")
+    .addItem("Sync Monthly Sheets from Schedule ", "syncMonthlySheetsFromScheduleOptionB")
     .addSeparator()
     .addItem("Setup Monthly Reminder (Last Day)", "setupMonthlyScheduleReminderTrigger")
     .addItem("Send Monthly Reminder Now", "sendMonthlyScheduleReminder_")
@@ -127,8 +127,7 @@ function onOpen() {
     .addItem("Cancel Pending Change", "cancelPendingChange")
     .addSeparator()
     .addItem("Setup RSVP Sync (ICS)", "setupRsvpSyncTrigger")
-    .addItem("Sync RSVPs Now", "syncRsvpStatuses")
-    .addItem("Fix Monthly RSVP Columns", "fixMonthlyRsvpColumns")
+    .addItem("Sync RSVPs Now", "syncRsvpStatuses")    
     .addSeparator()
     .addItem("Send Saturday Reminder", "sendSaturdayReminder")
     .addItem("Setup Saturday 5PM Trigger", "setupSaturday5pmTrigger")
@@ -142,16 +141,29 @@ function install() {
   setupAutoSyncOnEdit();
   setupMonthlyEditSyncOptionB();
   setupRsvpSyncTrigger();
-  SpreadsheetApp.getUi().alert("Installed triggers. Monthly changes now require Confirm & Send Emails.");
+  SpreadsheetApp.getUi().alert(
+    "Installed triggers:\n" +
+    "- onScheduleEdit\n" +
+    "- onMonthlyEditOptionB\n" +
+    "- syncRsvpStatuses\n\n" +
+    "Monthly changes now require Confirm & Send Emails."
+  );
 }
 
 function showWebAppHelp_() {
   SpreadsheetApp.getUi().alert(
-    "To enable YES/NO buttons:\n\n" +
-    "1) Deploy > New deployment > Web app\n" +
-    "2) Execute as: Me\n" +
-    "3) Who has access: Anyone with the link\n" +
-    "4) Copy the Web App URL and paste into CONFIG.WEBAPP_URL\n\n" +
+    "Quick Start (from scratch):\n" +
+    "1) Tech Scheduler > Start Auto Batch Scheduler\n" +
+    "2) Wait until the Schedule tab is filled up to END_DATE\n" +
+    "3) Tech Scheduler > Generate Monthly Sheets (Option B)\n" +
+    "4) Tech Scheduler > Sync Monthly Sheets from Schedule (Option B)\n\n" +
+    "Install triggers (required):\n" +
+    "5) Tech Scheduler > install (sets: onScheduleEdit, onMonthlyEditOptionB, syncRsvpStatuses)\n\n" +
+    "Enable YES/NO buttons:\n" +
+    "6) Deploy > New deployment > Web app\n" +
+    "7) Execute as: Me\n" +
+    "8) Who has access: Anyone with the link\n" +
+    "9) Copy the Web App URL and paste into CONFIG.WEBAPP_URL\n\n" +
     "Security is enforced by signed links + roster + assignment checks."
   );
 }
@@ -769,6 +781,7 @@ function syncScheduleChangesForRow_(ss, sh, row) {
   const data = sh.getDataRange().getValues();
   if (data.length < 2) return;
 
+  const rosterMaps = buildRosterMaps_(ss);
   const H = headerIndex_(data[0]);
 
   const required = [
@@ -849,6 +862,7 @@ function sendSaturdayReminder() {
   const data = sh.getDataRange().getValues();
   if (data.length < 2) return;
 
+  const rosterMaps = buildRosterMaps_(ss);
   const H = headerIndex_(data[0]);
   const nextSunday = getNextSunday_(new Date(), CONFIG.TIMEZONE);
   const dateKey = Utilities.formatDate(nextSunday, CONFIG.TIMEZONE, "yyyy-MM-dd");
@@ -878,8 +892,9 @@ function sendSaturdayReminder() {
 
     for (const [email, roles] of rolesByEmail) {
       const to = TEST_EMAIL_ONLY || email;
+      const displayName = rosterMaps.emailToName.get(String(email || "").trim().toLowerCase()) || email;
       const subject = `Sunday Tech Duty Reminder | ${CONFIG.TECH_TEAM_NAME}`;
-      const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles });
+      const htmlBody = buildPrettyReminderEmail_({ prettyDate: pretty, roles, displayName });
       const summary = `Tech Duty — Your role: ${roles.join(", ")}`;
       ensureGuestOnEvent_(event, to);
       sendCalendarInviteEmail_({ toEmail: to, subject, htmlBody, event, summaryOverride: summary });
@@ -933,6 +948,7 @@ function sendMonthlyScheduleReminder_() {
   const H = headerIndex_(data[0]);
   const roles = getRoleColumns_();
   const rosterMaps = buildRosterMaps_(ss);
+  const eventIdMap = buildEventIdMap_(sh);
 
   const now = new Date(Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd") + "T00:00:00");
   const nextMonth = new Date(now);
@@ -962,13 +978,35 @@ function sendMonthlyScheduleReminder_() {
     const dateKeys = Array.from(dateMap.keys()).sort();
     const items = dateKeys.map(k => {
       const pretty = Utilities.formatDate(new Date(k + "T00:00:00"), CONFIG.TIMEZONE, "EEE, MMM d, yyyy");
-      const rolePills = dateMap.get(k).map(r => pill_(r)).join("");
-      return `
-        <div style="margin:10px 0;">
-          <div style="font-weight:700;margin-bottom:6px;">${escapeHtml_(pretty)}</div>
-          <div>${rolePills}</div>
-        </div>
-      `;
+      const roleBlocks = dateMap.get(k).map(role => {
+        const eventId = eventIdMap.get(k) || "";
+        const yesLink = eventId
+          ? buildWebAppRsvpLink_({ action: "YES", role, dateKey: k, assigneeEmail: email, eventId })
+          : "#";
+        const noLink = eventId
+          ? buildWebAppRsvpLink_({ action: "NO", role, dateKey: k, assigneeEmail: email, eventId })
+          : "#";
+
+        return `
+          <div style="margin:10px 0;padding:12px;border:1px solid #e5e7eb;border-radius:12px;">
+            <div style="font-weight:800;margin-bottom:6px;">${escapeHtml_(pretty)}</div>
+            <div style="margin:0 0 10px 0;">Your role: <b>${escapeHtml_(role)}</b></div>
+            <div style="display:flex;gap:10px;margin:0;">
+              <a href="${yesLink}"
+                style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;
+                  padding:10px 14px;border-radius:10px;font-weight:800;">
+                Yes
+              </a>
+              <a href="${noLink}"
+                style="display:inline-block;background:#ffffff;color:#111827;text-decoration:none;
+                  padding:10px 14px;border-radius:10px;font-weight:800;border:1px solid #e5e7eb;">
+                No
+              </a>
+            </div>
+          </div>
+        `;
+      }).join("");
+      return roleBlocks;
     }).join("");
 
     const displayName = rosterMaps.emailToName.get(email) || "there";
@@ -982,7 +1020,7 @@ function sendMonthlyScheduleReminder_() {
         </div>
         ${items}
         <div style="margin:12px 0 0 0;color:#475569;">
-          If anything needs to change, just reply to this email.
+          Please tap Yes or No for each assignment above.
         </div>
       `,
     });
@@ -1014,7 +1052,7 @@ function generateMonthlySheetsOptionB() {
   });
 
   applyMonthlyDropdownsOptionB();
-  SpreadsheetApp.getUi().alert("Monthly sheets generated (Option B).");
+  SpreadsheetApp.getUi().alert("Monthly sheets generated .");
 }
 
 // 2) Apply dropdowns from Roster (names by eligibility)
@@ -1056,7 +1094,7 @@ function applyMonthlyDropdownsOptionB() {
     applyPrettyMonthFormattingOptionB_(sh);
   });
 
-  SpreadsheetApp.getUi().alert("Monthly dropdowns applied (Option B).");
+  SpreadsheetApp.getUi().alert("Monthly dropdowns applied .");
 }
 
 // 3) Sync month sheets from Schedule
@@ -1078,7 +1116,7 @@ function syncMonthlySheetsFromScheduleOptionB() {
     applyPrettyMonthFormattingOptionB_(sh);
   });
 
-  SpreadsheetApp.getUi().alert("Monthly sheets synced from Schedule (Option B).");
+  SpreadsheetApp.getUi().alert("Monthly sheets synced from Schedule .");
 }
 
 // 4) Setup monthly onEdit sync trigger
@@ -1344,7 +1382,7 @@ function clearPendingChanges_() {
 }
 
 // ---------------------
-// Month sheet builders (Option B)
+// Month sheet builders 
 // ---------------------
 function buildOneMonthSheetOptionB_(ss, sheetName, monthKey, scheduleMap, emailToName) {
   const sh = getOrCreateSheet_(ss, sheetName, MONTH_HEADERS);
@@ -1822,6 +1860,24 @@ function buildScheduleMap_(scheduleSheet) {
   return map;
 }
 
+function buildEventIdMap_(scheduleSheet) {
+  const map = new Map();
+  const data = scheduleSheet.getDataRange().getValues();
+  if (data.length < 2) return map;
+
+  const H = headerIndex_(data[0]);
+  if (H["Date"] == null || H["Event Id"] == null) return map;
+
+  for (let r = 1; r < data.length; r++) {
+    const dateKey = normalizeDateKey_(data[r][H["Date"]]);
+    if (!dateKey) continue;
+    const eventId = String(data[r][H["Event Id"]] || "").trim();
+    if (eventId) map.set(dateKey, eventId);
+  }
+
+  return map;
+}
+
 // =====================
 // MONTH HELPERS
 // =====================
@@ -2059,23 +2115,30 @@ function buildPrettyEmail_({ title, subtitle, bodyHtml }) {
   `;
 }
 
-function buildPrettyReminderEmail_({ prettyDate, roles }) {
-  const rolePills = roles.map(r => pill_(r)).join("");
+function buildPrettyReminderEmail_({ prettyDate, roles, displayName }) {
+  const roleText = Array.isArray(roles) ? roles.join(", ") : String(roles || "");
 
   return buildPrettyEmail_({
-    title: "Scheduled to Serve This Sunday",
-    subtitle: prettyDate,
+    title: "Tech Schedule Reminder",
+    subtitle: "",
     bodyHtml: `
-      <div style="margin:0 0 10px 0;">
-        Thank you for serving in our church tech ministry.
+      <div style="margin:0 0 12px 0;">Hi <b>${escapeHtml_(displayName || "there")}</b>!</div>
+
+      <div style="margin:0 0 12px 0;">You are scheduled to serve tomorrow,</div>
+
+      <div style="font-size:26px;font-weight:800;margin:6px 0 12px 0;">
+        ${escapeHtml_(prettyDate)}
       </div>
 
-      <div style="font-weight:700;margin:12px 0 6px 0;">Your role(s):</div>
-      <div style="margin-bottom:10px;">${rolePills}</div>
-
-      <div style="margin:10px 0 0 0;color:#334155;">
-        We're grateful for your faithfulness.
+      <div style="margin:0 0 12px 0;">
+        Your role is: <b>${escapeHtml_(roleText)}</b>
       </div>
+
+      <div style="margin:0 0 12px 0;color:#334155;">
+        If you have conflicts please notify us Tech group chat as soon as possible.
+      </div>
+
+      <div style="margin:0;">Thank you for serving in our church’s tech ministry.</div>
     `,
   });
 }
