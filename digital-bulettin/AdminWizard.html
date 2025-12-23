@@ -1,3 +1,6 @@
+<!-- =====================
+AdminWizard.html
+===================== -->
 <!doctype html>
 <html>
 <head>
@@ -174,6 +177,7 @@
   function fingerprintPayload(p){
     return JSON.stringify({
       service_id: p.service_id || "",
+      flow: p.flow || "",
       type: p.type || "",
       order: String(p.order ?? ""),
       title: p.title || "",
@@ -191,6 +195,7 @@
   function getPayload(){
     return {
       service_id: $("service_id").value.trim(),
+      flow: $("flow").value,              // ✅ include flow so server can generate skeleton
       type: $("type").value,
       order: $("order").value,
       title: $("title").value,
@@ -212,7 +217,7 @@
   function persistCurrentDraft(){
     const p = getPayload();
     if (!p.service_id || !p.type) return;
-    saveDraftLocal(p.service_id, $("flow").value, p.type, p);
+    saveDraftLocal(p.service_id, p.flow, p.type, p);
   }
 
   function onAnyInput(){
@@ -276,9 +281,10 @@
     }
 
     const type = shell.type;
+    const flow = $("flow").value;
 
     // 1) local draft (unsaved typing)
-    const local = loadDraftLocal(sid, $("flow").value, type);
+    const local = loadDraftLocal(sid, flow, type);
     if (local && local.service_id === sid && local.type === type) {
       setFormValues(local, shell.meta);
       toast("Loaded draft (local)");
@@ -338,7 +344,14 @@
         persistCurrentDraft();
         markDirty(false);
         setBadge("ok", "Saved");
-        toast("Saved (" + (res?.mode || "upsert") + (res?.dedup_deleted ? `, dedup ${res.dedup_deleted}` : "") + ")");
+
+        const msg = [
+          `Saved (${res?.mode || "upsert"})`,
+          res?.skeleton_created ? `+ skeleton ${res.skeleton_created}` : null,
+          res?.dedup_deleted ? `dedup ${res.dedup_deleted}` : null,
+        ].filter(Boolean).join(" • ");
+
+        toast(msg);
         lastLoadedFingerprint = fingerprintPayload(getPayload());
         if (cb) cb();
       })
@@ -351,7 +364,7 @@
 
   // init
   fillSelect($("posture"), BOOT.postureOptions || []);
-  ["service_id","order","title","posture","body"].forEach(id => {
+  ["service_id","flow","order","title","posture","body"].forEach(id => {
     const el = $(id);
     el.addEventListener("input", onAnyInput);
     el.addEventListener("change", onAnyInput);

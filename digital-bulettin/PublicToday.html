@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:system-ui;margin:0;background:#f6f7fb}
+    .wrap{max-width:720px;margin:0 auto;padding:20px}
+    .card{background:#fff;border-radius:18px;padding:18px;box-shadow:0 10px 22px rgba(0,0,0,.06)}
+    .title{font-weight:900;font-size:22px;margin:0}
+    .muted{color:#6b7280;font-size:13px;margin-top:6px}
+    .btn{display:inline-block;margin-top:14px;background:#111;color:#fff;
+      padding:12px 14px;border-radius:14px;text-decoration:none;font-weight:900}
+    .pill{display:inline-block;border:1px solid #e5e7eb;border-radius:999px;padding:4px 10px;font-size:12px;color:#374151}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  </style>
+</head>
+<body>
+<script>
+  const BOOT = <?!= JSON.stringify(boot) ?>;
+</script>
+
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <span class="pill">SCRIPTURE ALONE</span>
+      <span class="pill">Today</span>
+    </div>
+
+    <h1 class="title">Open Today’s Liturgy</h1>
+    <div class="muted">Service: <b id="sid"></b></div>
+
+    <a class="btn" id="openBtn">Open Today’s Liturgy</a>
+
+    <div class="muted" style="margin-top:12px;">
+      Tip: Add this page as your QR target.
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById("sid").textContent = BOOT.service_id;
+  const base = location.href.split("?")[0];
+  document.getElementById("openBtn").href = base + "?p=liturgy&service_id=" + encodeURIComponent(BOOT.service_id);
+</script>
+</body>
+</html>

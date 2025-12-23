@@ -1,3 +1,6 @@
+// =====================
+// Code.gs
+// =====================
 const CONFIG = {
   SPREADSHEET_ID: SpreadsheetApp.getActive().getId(),
   SECTIONS_SHEET: "Sections",
@@ -20,7 +23,7 @@ const TYPE_META = [
   { type: "preaching",           title: "Preaching of the Word",                      order: 130, posture: "SEATED" },
   { type: "response_hymn",       title: "Response Hymn",                              order: 140, posture: "SEATED" },
   { type: "offertory_prayer",    title: "Offertory & Closing Prayer",                 order: 150, posture: "SEATED" },
-  { type: "doxology",            title: "Doxology",                                   order: 160, posture: "STANDING" },
+  { type: "doxology",            title: "Doxology",                                   order: 160,  posture: "STANDING" },
   { type: "benediction",         title: "Benediction",                                order: 170, posture: "STANDING" },
   { type: "postlude",            title: "Postlude / Silence for Reflection",          order: 180, posture: "SEATED" },
 ];
@@ -41,7 +44,7 @@ const FLOWS = {
 
 function doGet() {
   const tpl = HtmlService.createTemplateFromFile("AdminWizard");
-  tpl.boot = getBootData_(); // <-- must be named `boot` to match the HTML
+  tpl.boot = getBootData_(); // IMPORTANT: HTML expects `boot`
   return tpl.evaluate()
     .setTitle("Worship Order — Wizard")
     .addMetaTag("viewport", "width=device-width, initial-scale=1")
@@ -92,12 +95,12 @@ function getSectionsSheet_() {
   const col = {};
   headers.forEach((h, i) => col[String(h).trim()] = i);
 
-  return { ss, sh, headers, col };
+  return { sh, headers, col };
 }
 
 /**
  * Returns the saved section for (service_id, type) or null.
- * If duplicates exist, returns the last one (most recent row) by default.
+ * If duplicates exist, returns the last one (most recent row).
  */
 function getSection(service_id, type) {
   service_id = String(service_id || "").trim();
@@ -112,7 +115,6 @@ function getSection(service_id, type) {
   const sidIdx = col["service_id"];
   const typeIdx = col["type"];
 
-  // choose LAST matching row (most recent append/update)
   let foundRow = null;
   for (let i = values.length - 1; i >= 1; i--) {
     if (String(values[i][sidIdx]).trim() === service_id &&
@@ -134,8 +136,89 @@ function getSection(service_id, type) {
 }
 
 /**
+ * ✅ Ensures ALL sections for a service_id exist based on flow.
+ * - Creates missing rows with default order/title/posture
+ * - body is always blank for skeleton rows
+ * - Removes duplicates for the whole service (keeps last)
+ */
+function ensureServiceSkeleton_(service_id, flow) {
+  const types = (FLOWS[flow] || FLOWS.AM || []).slice();
+  if (!types.length) throw new Error(`Flow is empty/unknown: ${flow}`);
+
+  const metaByType = {};
+  TYPE_META.forEach(m => metaByType[m.type] = m);
+
+  const { sh, headers, col } = getSectionsSheet_();
+  const values = sh.getDataRange().getValues();
+
+  const sidIdx = col["service_id"];
+  const typeIdx = col["type"];
+
+  // Map: type -> list of row indices (1-based)
+  const map = {};
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][sidIdx]).trim() !== service_id) continue;
+    const t = String(values[i][typeIdx]).trim();
+    if (!t) continue;
+    if (!map[t]) map[t] = [];
+    map[t].push(i + 1);
+  }
+
+  // Dedup per type for this service_id (keep last row)
+  let dedupDeleted = 0;
+  const rowsToDelete = [];
+  Object.keys(map).forEach(t => {
+    const rows = map[t];
+    if (rows.length > 1) {
+      rows.slice(0, -1).forEach(r => rowsToDelete.push(r));
+    }
+  });
+  rowsToDelete.sort((a, b) => b - a).forEach(r => {
+    sh.deleteRow(r);
+    dedupDeleted++;
+  });
+
+  // Rebuild existence map after deletion
+  const fresh = sh.getDataRange().getValues();
+  const exists = {};
+  for (let i = 1; i < fresh.length; i++) {
+    if (String(fresh[i][sidIdx]).trim() !== service_id) continue;
+    const t = String(fresh[i][typeIdx]).trim();
+    exists[t] = true;
+  }
+
+  // Create missing rows
+  let createdCount = 0;
+  const rowsToAppend = [];
+
+  types.forEach(t => {
+    if (exists[t]) return;
+
+    const meta = metaByType[t] || { title: t, order: 0, posture: "" };
+    const row = new Array(headers.length).fill("");
+    row[col["service_id"]] = service_id;
+    row[col["order"]] = Number(meta.order || 0);
+    row[col["type"]] = t;
+    row[col["title"]] = String(meta.title || "");
+    row[col["body"]] = ""; // skeleton body blank
+    row[col["posture"]] = String(meta.posture || "");
+    row[col["updated_at"]] = new Date();
+
+    rowsToAppend.push(row);
+    createdCount++;
+  });
+
+  if (rowsToAppend.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, rowsToAppend.length, headers.length).setValues(rowsToAppend);
+  }
+
+  return { createdCount, dedupDeleted };
+}
+
+/**
  * Upsert by unique key (service_id + type).
- * Also deduplicates any existing duplicates (keeps ONE row, deletes the rest).
+ * ✅ On first save for a service, auto-generates the whole service skeleton (all sections in the flow) with blank bodies.
+ * ✅ Deduplicates any existing duplicates (keeps one, deletes the rest).
  */
 function upsertSection(payload) {
   const lock = LockService.getDocumentLock();
@@ -143,12 +226,12 @@ function upsertSection(payload) {
 
   try {
     const service_id = String(payload.service_id || "").trim();
+    const flow = String(payload.flow || "AM").trim().toUpperCase(); // from UI
     const type = String(payload.type || "").trim();
     const title = String(payload.title || "").trim();
     const body = String(payload.body || "");
     const posture = String(payload.posture || "").trim().toUpperCase();
 
-    // order can come as string/number; allow blank -> fallback to 0 check later
     const orderRaw = payload.order;
     const order = Number(orderRaw);
 
@@ -156,6 +239,9 @@ function upsertSection(payload) {
     if (!type) throw new Error("type is required.");
     if (!orderRaw && orderRaw !== 0) throw new Error("order is required.");
     if (!order || Number.isNaN(order)) throw new Error("order must be a number.");
+
+    // ✅ Ensure skeleton exists (all steps, blank bodies)
+    const skeletonInfo = ensureServiceSkeleton_(service_id, flow);
 
     const { sh, headers, col } = getSectionsSheet_();
     const values = sh.getDataRange().getValues();
@@ -179,31 +265,146 @@ function upsertSection(payload) {
     row[col["order"]] = order;
     row[col["type"]] = type;
     row[col["title"]] = title;
-    row[col["body"]] = body;
+    row[col["body"]] = body; // only this step gets its body
     row[col["posture"]] = posture;
     row[col["updated_at"]] = new Date();
 
     let mode = "created";
-    let keptRowIndex = -1;
+    let dedupDeleted = 0;
 
     if (matches.length) {
-      // keep the LAST match as the canonical row (most recent), overwrite it
-      keptRowIndex = matches[matches.length - 1];
+      // keep the LAST match as canonical row (most recent)
+      const keptRowIndex = matches[matches.length - 1];
       sh.getRange(keptRowIndex, 1, 1, row.length).setValues([row]);
       mode = "updated";
 
-      // delete other duplicates (from bottom to top to keep indexes valid)
+      // delete other duplicates (bottom to top)
       const toDelete = matches.slice(0, -1).sort((a, b) => b - a);
       toDelete.forEach(r => sh.deleteRow(r));
-
-      return { ok: true, mode, dedup_deleted: toDelete.length };
+      dedupDeleted = toDelete.length;
+    } else {
+      sh.appendRow(row);
+      mode = "created";
     }
 
-    // no existing -> append
-    sh.appendRow(row);
-    return { ok: true, mode, dedup_deleted: 0 };
+    return {
+      ok: true,
+      mode,
+      dedup_deleted: dedupDeleted,
+      skeleton_created: skeletonInfo.createdCount,
+      skeleton_dedup_deleted: skeletonInfo.dedupDeleted,
+    };
 
   } finally {
     lock.releaseLock();
   }
 }
+
+function doGet(e) {
+  const path = (e && e.parameter && e.parameter.p) ? String(e.parameter.p) : ""; 
+  // use:
+  // /exec?p=liturgy&service_id=2025-12-21-AM
+  // /exec?p=today
+  // /exec?p=admin  (your wizard)
+
+  if (path === "admin") {
+    const tpl = HtmlService.createTemplateFromFile("AdminWizard");
+    tpl.boot = getBootData_();
+    return tpl.evaluate()
+      .setTitle("Worship Order — Admin")
+      .addMetaTag("viewport", "width=device-width, initial-scale=1")
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
+  if (path === "liturgy") {
+    const serviceId = resolveServiceId_(e);
+    const tpl = HtmlService.createTemplateFromFile("PublicLiturgy");
+    tpl.boot = buildPublicBoot_(serviceId);
+    return tpl.evaluate()
+      .setTitle("Today's Liturgy")
+      .addMetaTag("viewport", "width=device-width, initial-scale=1")
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
+  // default: today landing
+  const serviceId = resolveServiceId_(e);
+  const tpl = HtmlService.createTemplateFromFile("PublicToday");
+  tpl.boot = buildPublicBoot_(serviceId);
+  return tpl.evaluate()
+    .setTitle("Today's Liturgy")
+    .addMetaTag("viewport", "width=device-width, initial-scale=1")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// --- PUBLIC BOOT (cached) ---
+function buildPublicBoot_(service_id) {
+  const data = getServiceData_(service_id);
+  return {
+    service_id: service_id,
+    heading: data.heading || service_id,
+    dateLabel: data.dateLabel || "",
+    sections: data.sections || [],
+  };
+}
+
+/**
+ * Resolve service_id:
+ * - if service_id param exists, use it
+ * - else default to "today" = YYYY-MM-DD-AM (customize)
+ */
+function resolveServiceId_(e) {
+  const q = (e && e.parameter) ? e.parameter : {};
+  const sid = String(q.service_id || "").trim();
+  if (sid) return sid;
+
+  // default: today's AM (customize as needed)
+  const tz = "Asia/Manila";
+  const d = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  return `${d}-AM`;
+}
+
+/**
+ * Returns { heading, dateLabel, sections[] } for a service_id.
+ * Cached to avoid hammering Sheets with 100 users.
+ */
+function getServiceData_(service_id) {
+  const cache = CacheService.getScriptCache();
+  const key = "svc:" + service_id;
+  const hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+
+  const { sh, col } = getSectionsSheet_();
+  const values = sh.getDataRange().getValues();
+  if (values.length <= 1) return { heading: service_id, sections: [] };
+
+  const sidIdx = col["service_id"];
+  const orderIdx = col["order"];
+  const typeIdx = col["type"];
+  const titleIdx = col["title"];
+  const bodyIdx = col["body"];
+  const postureIdx = col["posture"];
+
+  const sections = [];
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][sidIdx]).trim() !== service_id) continue;
+    sections.push({
+      order: Number(values[i][orderIdx] || 0),
+      type: String(values[i][typeIdx] || ""),
+      title: String(values[i][titleIdx] || ""),
+      body: String(values[i][bodyIdx] || ""),
+      posture: String(values[i][postureIdx] || ""),
+    });
+  }
+
+  sections.sort((a,b) => (a.order||0) - (b.order||0));
+
+  const out = {
+    heading: service_id.replace(/-AM$|-PM$/,"").toUpperCase(),
+    dateLabel: service_id,
+    sections,
+  };
+
+  cache.put(key, JSON.stringify(out), 60 * 60); // 1 hour
+  return out;
+}
+

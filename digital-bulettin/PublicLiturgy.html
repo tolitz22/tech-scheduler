@@ -1,0 +1,190 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb;
+      --btn:#111; --btnText:#fff;
+      --radius:16px;
+      --pad:16px;
+      --font: 15px;
+      --fontLarge: 18px;
+    }
+    body{font-family:system-ui;margin:0;background:var(--bg);color:var(--text)}
+    .wrap{max-width:920px;margin:0 auto;padding:18px}
+    .top{
+      display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+      margin-bottom:12px;
+    }
+    .brand{display:flex;align-items:center;gap:10px}
+    .logo{
+      width:40px;height:40px;border-radius:12px;background:#111;color:#fff;
+      display:flex;align-items:center;justify-content:center;font-weight:900;
+    }
+    .h1{margin:0;font-size:22px;font-weight:900}
+    .muted{color:var(--muted);font-size:13px;margin-top:2px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .tab{
+      border:1px solid var(--line);background:var(--card);border-radius:999px;
+      padding:8px 12px;font-weight:900;cursor:pointer;font-size:13px;
+    }
+    .tab.active{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
+    .card{
+      background:var(--card);border:1px solid var(--line);
+      border-radius:var(--radius);padding:var(--pad);
+      box-shadow:0 10px 22px rgba(0,0,0,.04);
+    }
+    .sectionTitle{font-weight:900;font-size:16px}
+    .meta{color:var(--muted);font-size:12px;margin-top:4px}
+    .btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .btn{
+      border:1px solid var(--line);background:var(--card);border-radius:12px;
+      padding:10px 12px;font-weight:900;cursor:pointer
+    }
+
+    /* Reader modal */
+    .overlay{
+      position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;
+    }
+    .overlay.show{display:flex}
+    .sheet{
+      width:100%;max-width:920px;margin:0 auto;background:var(--card);
+      border-radius:18px 18px 0 0;padding:16px;border:1px solid var(--line);
+      max-height:88vh;overflow:auto;
+    }
+    .readerTop{display:flex;justify-content:space-between;gap:12px;align-items:center}
+    .readerTitle{font-weight:900;font-size:18px;margin:0}
+    .close{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:8px 10px;font-weight:900;cursor:pointer}
+    .body{
+      margin-top:12px;white-space:pre-wrap;line-height:1.65;
+      font-size:var(--font);
+    }
+
+    /* Large text toggle */
+    body.large .body{font-size:var(--fontLarge)}
+    body.large .sectionTitle{font-size:18px}
+
+    /* Dark mode */
+    body.dark{
+      --bg:#0b0f17; --card:#111827; --text:#f3f4f6; --muted:#9ca3af; --line:#243040;
+      --btn:#f3f4f6; --btnText:#111827;
+    }
+  </style>
+</head>
+<body>
+<script>
+  const BOOT = <?!= JSON.stringify(boot) ?>;
+</script>
+
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <div class="logo">SA</div>
+      <div>
+        <div class="h1" id="heading">LORD’S DAY</div>
+        <div class="muted" id="dateLabel"></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="tab active" id="tabOrder">ORDER</button>
+      <button class="tab" id="tabLarge">LARGE TEXT</button>
+      <button class="tab" id="tabDark">DARK</button>
+    </div>
+  </div>
+
+  <div class="grid" id="list"></div>
+</div>
+
+<!-- Reader -->
+<div class="overlay" id="overlay">
+  <div class="sheet">
+    <div class="readerTop">
+      <div>
+        <h2 class="readerTitle" id="rTitle"></h2>
+        <div class="muted" id="rMeta"></div>
+      </div>
+      <button class="close" id="closeBtn">Close</button>
+    </div>
+    <div class="body" id="rBody"></div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  // Title
+  $("heading").textContent = BOOT.heading || "LORD’S DAY";
+  $("dateLabel").textContent = BOOT.dateLabel || BOOT.service_id || "";
+
+  // Render list
+  const list = $("list");
+  const sections = (BOOT.sections || []).slice();
+
+  function renderList(){
+    list.innerHTML = "";
+    sections.forEach(s => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="sectionTitle">${escapeHtml(s.title || s.type)}</div>
+        <div class="meta">${escapeHtml(s.posture || "")}${s.posture ? " • " : ""}Order ${s.order}</div>
+        <div class="btnrow">
+          <button class="btn">Open</button>
+        </div>
+      `;
+      card.querySelector("button").onclick = () => openReader(s);
+      list.appendChild(card);
+    });
+  }
+
+  function openReader(s){
+    $("rTitle").textContent = s.title || s.type;
+    $("rMeta").textContent = (s.posture ? `(${s.posture})` : "") + (s.type ? ` • ${s.type}` : "");
+    $("rBody").textContent = s.body || "";
+    $("overlay").classList.add("show");
+  }
+
+  $("closeBtn").onclick = () => $("overlay").classList.remove("show");
+  $("overlay").onclick = (e) => { if (e.target.id === "overlay") $("overlay").classList.remove("show"); };
+
+  // Toggles
+  $("tabLarge").onclick = () => {
+    document.body.classList.toggle("large");
+    setActiveToggles();
+  };
+  $("tabDark").onclick = () => {
+    document.body.classList.toggle("dark");
+    setActiveToggles();
+  };
+  $("tabOrder").onclick = () => {
+    // kept for UI parity, list is the main view
+    setActiveTab("tabOrder");
+  };
+
+  function setActiveTab(id){
+    ["tabOrder","tabLarge","tabDark"].forEach(x => $(x).classList.remove("active"));
+    $(id).classList.add("active");
+  }
+  function setActiveToggles(){
+    // ORDER stays active as primary tab
+    setActiveTab("tabOrder");
+    // visually indicate toggles
+    $("tabLarge").classList.toggle("active", document.body.classList.contains("large"));
+    $("tabDark").classList.toggle("active", document.body.classList.contains("dark"));
+  }
+
+  function escapeHtml(str){
+    return String(str || "")
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+
+  renderList();
+  setActiveToggles();
+</script>
+</body>
+</html>
