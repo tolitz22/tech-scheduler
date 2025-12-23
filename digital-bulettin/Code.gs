@@ -247,7 +247,9 @@ function getServiceData_(service_id) {
   if (hit) return JSON.parse(hit);
 
   const { sh, col } = getSectionsSheet_();
-  const values = sh.getDataRange().getValues();
+  const range = sh.getDataRange();
+  const values = range.getValues();
+  const richValues = range.getRichTextValues();
   if (values.length <= 1) {
     const outEmpty = { heading: formatHeading_(service_id), dateLabel: service_id, sections: [] };
     cache.put(key, JSON.stringify(outEmpty), 60 * 10);
@@ -264,11 +266,14 @@ function getServiceData_(service_id) {
   const sections = [];
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][sidIdx]).trim() !== service_id) continue;
+    const richCell = richValues[i] ? richValues[i][bodyIdx] : null;
+    const bodyRich = richTextToRuns_(richCell);
     sections.push({
       order: Number(values[i][orderIdx] || 0),
       type: String(values[i][typeIdx] || ""),
       title: String(values[i][titleIdx] || ""),
       body: String(values[i][bodyIdx] || ""),
+      body_rich: bodyRich,
       posture: String(values[i][postureIdx] || ""),
     });
   }
@@ -288,6 +293,29 @@ function getServiceData_(service_id) {
 function formatHeading_(service_id) {
   // "2025-12-21-AM" -> "2025-12-21"
   return String(service_id || "").replace(/-AM$|-PM$/i, "");
+}
+
+function richTextToRuns_(richText) {
+  if (!richText || !richText.getRuns) return [];
+  const runs = richText.getRuns();
+  if (!runs || !runs.length) return [];
+
+  const out = [];
+  let hasStyle = false;
+  runs.forEach((r) => {
+    const text = r.getText ? r.getText() : "";
+    if (!text) return;
+    const style = r.getTextStyle ? r.getTextStyle() : null;
+    const bold = style ? !!style.isBold() : false;
+    const italic = style ? !!style.isItalic() : false;
+    const link = r.getLinkUrl ? (r.getLinkUrl() || "") : "";
+    if (bold || italic || link) hasStyle = true;
+    out.push({ text, bold, italic, link });
+  });
+
+  if (!out.length) return [];
+  if (!hasStyle && out.length === 1) return [];
+  return out;
 }
 
 function getServiceInfo_(service_id) {

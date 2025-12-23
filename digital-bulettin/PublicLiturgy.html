@@ -386,6 +386,37 @@ PublicLiturgy.html
       .replaceAll('"',"&quot;").replaceAll("'","&#039;");
   }
 
+  function escapeAttr(str){
+    return String(str || "")
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+
+  function renderBodyHtml(section){
+    const text = String(section.body || "").trim();
+    const runs = Array.isArray(section.body_rich) ? section.body_rich : [];
+    if (!runs.length) {
+      return escapeHtml(text || "-").replaceAll("\n", "<br>");
+    }
+
+    let html = "";
+    runs.forEach((r) => {
+      let t = escapeHtml(r.text || "");
+      if (!t) return;
+      t = t.replaceAll("\n", "<br>");
+      if (r.bold) t = "<strong>" + t + "</strong>";
+      if (r.italic) t = "<em>" + t + "</em>";
+      if (r.link) {
+        const href = escapeAttr(r.link);
+        t = `<a href="${href}" target="_blank" rel="noopener noreferrer">${t}</a>`;
+      }
+      html += t;
+    });
+
+    if (!html) return escapeHtml(text || "-").replaceAll("\n", "<br>");
+    return html;
+  }
+
   // Convert posture to screenshot-style: (Seated) or (Standing)
   function postureLabel(p){
     const v = String(p||"").trim().toUpperCase();
@@ -437,11 +468,9 @@ PublicLiturgy.html
       };
 
       if (idx === selectedIndex) {
-        const body = String(s.body || "").trim() || "—";
-        const bodyText = String(s.body || "").trim() || "-";
         const bodyEl = document.createElement("div");
         bodyEl.className = "bodyBlock";
-        bodyEl.textContent = bodyText;
+        bodyEl.innerHTML = renderBodyHtml(s);
         item.appendChild(bodyEl);
       }
 
