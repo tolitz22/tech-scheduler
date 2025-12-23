@@ -199,6 +199,7 @@ function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
     const action = String(p.a || "").toUpperCase(); // YES / NO
+    if (!action) return html_(buildMonthlyWebAppView_());
     const role = String(p.role || "");
     const dateKey = String(p.date || "");
     const email = String(p.email || "").trim().toLowerCase();
@@ -415,6 +416,317 @@ function uiMsg_(msg) {
       <div style="font-size:14px;color:#334155;">${escapeHtml_(msg)}</div>
     </div>
   `;
+}
+
+function buildMonthlyWebAppView_() {
+  const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+  const today = new Date(Utilities.formatDate(new Date(), CONFIG.TIMEZONE, "yyyy-MM-dd") + "T00:00:00");
+  const monthKey = Utilities.formatDate(today, CONFIG.TIMEZONE, "yyyy-MM");
+  const monthLabel = Utilities.formatDate(today, CONFIG.TIMEZONE, "MMMM yyyy");
+  const sheetName = monthNameFromKey_(monthKey);
+  const sh = ss.getSheetByName(sheetName);
+  if (!sh) {
+    return buildMonthlyWebAppMessage_(
+      "Monthly Sheet Missing",
+      `We couldn't find the "${sheetName}" sheet for ${monthLabel}.`
+    );
+  }
+
+  const data = sh.getDataRange().getValues();
+  if (data.length < 2) {
+    return buildMonthlyWebAppMessage_(
+      "No Schedule Yet",
+      `The ${sheetName} sheet has no entries yet.`
+    );
+  }
+
+  const H = headerIndex_(data[0]);
+  const required = [
+    "Date", "Audio", "Livestream", "PPT",
+    "Audio RSVP", "Livestream RSVP", "PPT RSVP",
+  ];
+  const missing = required.filter(k => H[k] == null);
+  if (missing.length) {
+    return buildMonthlyWebAppMessage_(
+      "Missing Columns",
+      `Please add these columns to "${sheetName}": ${missing.join(", ")}.`
+    );
+  }
+
+  let totalAssignments = 0;
+  let pendingCount = 0;
+  const cards = [];
+
+  for (let r = 1; r < data.length; r++) {
+    const dateVal = data[r][H["Date"]];
+    if (!dateVal) continue;
+    const dateKey = normalizeDateKey_(dateVal);
+    const dateLabel = dateVal instanceof Date
+      ? Utilities.formatDate(dateVal, CONFIG.TIMEZONE, "EEE, MMM d")
+      : String(dateVal);
+
+    const roles = [
+      { label: "Audio", name: data[r][H["Audio"]], rsvp: data[r][H["Audio RSVP"]] },
+      { label: "LiveStream", name: data[r][H["Livestream"]], rsvp: data[r][H["Livestream RSVP"]] },
+      { label: "PPT", name: data[r][H["PPT"]], rsvp: data[r][H["PPT RSVP"]] },
+    ];
+
+    const items = roles.map(role => {
+      const rawName = String(role.name || "").trim();
+      const name = rawName || "Unassigned";
+      const statusLabel = rawName ? rsvpLabel_(role.rsvp) : "—";
+      const statusKey = rawName ? rsvpStyleKey_(role.rsvp) : "empty";
+      if (rawName) {
+        totalAssignments++;
+        if (statusKey !== "yes" && statusKey !== "no") pendingCount++;
+      }
+
+      return `
+        <div class="role">
+          <div class="role-meta">
+            <div class="role-title">${escapeHtml_(role.label)}</div>
+            <div class="role-name">${escapeHtml_(name)}</div>
+          </div>
+          <span class="badge ${escapeHtml_(statusKey)}">${escapeHtml_(statusLabel)}</span>
+        </div>
+      `;
+    }).join("");
+
+    cards.push(`
+      <section class="day-card">
+        <div class="day-head">
+          <div>
+            <div class="day-date">${escapeHtml_(dateLabel)}</div>
+            <div class="day-key">${escapeHtml_(dateKey)}</div>
+          </div>
+        </div>
+        <div class="roles">${items}</div>
+      </section>
+    `);
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <base target="_top" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --ink: #0f172a;
+            --muted: #5b6473;
+            --card: #ffffff;
+            --stroke: #e2e8f0;
+            --glow: rgba(251, 146, 60, 0.25);
+            --accent: #f97316;
+            --accent-dark: #c2410c;
+            --surface: #f8fafc;
+            --good: #22c55e;
+            --bad: #ef4444;
+            --maybe: #6366f1;
+            --invited: #f59e0b;
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            font-family: "Space Grotesk", "Segoe UI", sans-serif;
+            color: var(--ink);
+            background: radial-gradient(circle at top, #fff7ed 0%, #f8fafc 40%, #eef2ff 100%);
+          }
+          .page {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 32px 20px 48px;
+          }
+          .hero {
+            background: linear-gradient(120deg, rgba(249, 115, 22, 0.15), rgba(99, 102, 241, 0.12));
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+            border-radius: 24px;
+            padding: 28px;
+            position: relative;
+            overflow: hidden;
+          }
+          .hero:after {
+            content: "";
+            position: absolute;
+            right: -40px;
+            top: -60px;
+            width: 180px;
+            height: 180px;
+            background: radial-gradient(circle, rgba(249, 115, 22, 0.45), rgba(249, 115, 22, 0));
+            opacity: 0.7;
+          }
+          .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-dark);
+          }
+          h1 {
+            font-family: "Fraunces", Georgia, serif;
+            font-size: clamp(28px, 4vw, 40px);
+            margin: 10px 0 6px;
+          }
+          .subtitle {
+            color: var(--muted);
+            font-size: 15px;
+          }
+          .stats {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            margin-top: 18px;
+          }
+          .stat {
+            padding: 12px 14px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid var(--stroke);
+            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06);
+          }
+          .stat-label {
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+          }
+          .list {
+            margin-top: 26px;
+            display: grid;
+            gap: 18px;
+          }
+          .day-card {
+            background: var(--card);
+            border: 1px solid var(--stroke);
+            border-radius: 20px;
+            padding: 18px 20px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+            animation: rise 0.6s ease both;
+          }
+          .day-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+          }
+          .day-date {
+            font-weight: 700;
+            font-size: 18px;
+          }
+          .day-key {
+            font-size: 12px;
+            color: var(--muted);
+          }
+          .roles {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          }
+          .role {
+            border: 1px solid var(--stroke);
+            border-radius: 14px;
+            padding: 12px 14px;
+            background: var(--surface);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+          }
+          .role-title {
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+          }
+          .role-name {
+            font-weight: 600;
+            font-size: 15px;
+            margin-top: 4px;
+          }
+          .badge {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 6px 10px;
+            border-radius: 999px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            border: 1px solid transparent;
+          }
+          .badge.yes { background: rgba(34, 197, 94, 0.15); color: #15803d; border-color: rgba(34, 197, 94, 0.4); }
+          .badge.no { background: rgba(239, 68, 68, 0.12); color: #b91c1c; border-color: rgba(239, 68, 68, 0.35); }
+          .badge.invited { background: rgba(245, 158, 11, 0.2); color: #b45309; border-color: rgba(245, 158, 11, 0.5); }
+          .badge.maybe { background: rgba(99, 102, 241, 0.18); color: #4f46e5; border-color: rgba(99, 102, 241, 0.5); }
+          .badge.pending { background: rgba(249, 115, 22, 0.18); color: #c2410c; border-color: rgba(249, 115, 22, 0.45); }
+          .badge.empty { background: rgba(148, 163, 184, 0.18); color: #64748b; border-color: rgba(148, 163, 184, 0.4); }
+          @keyframes rise {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          @media (max-width: 640px) {
+            .hero { padding: 22px; }
+            .day-card { padding: 16px; }
+            .roles { grid-template-columns: 1fr; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <header class="hero">
+            <div class="eyebrow">Tech Scheduler</div>
+            <h1>Volunteer Schedule</h1>
+            <div class="subtitle">${escapeHtml_(monthLabel)}</div>
+            <div class="stats">
+              <div class="stat">
+                <div class="stat-label">Assignments</div>
+                <div class="stat-value">${totalAssignments}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">Needs Response</div>
+                <div class="stat-value">${pendingCount}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">Month Sheet</div>
+                <div class="stat-value">${escapeHtml_(sheetName)}</div>
+              </div>
+            </div>
+          </header>
+          <main class="list">
+            ${cards.join("")}
+          </main>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function buildMonthlyWebAppMessage_(title, body) {
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;padding:20px;">
+      <div style="font-size:18px;font-weight:800;margin-bottom:8px;">${escapeHtml_(title)}</div>
+      <div style="font-size:14px;color:#475569;">${escapeHtml_(body)}</div>
+    </div>
+  `;
+}
+
+function rsvpLabel_(value) {
+  const s = String(value || "").trim();
+  return s ? s : "Pending";
+}
+
+function rsvpStyleKey_(value) {
+  const s = String(value || "").trim().toLowerCase();
+  if (s === "yes") return "yes";
+  if (s === "no") return "no";
+  if (s === "invited") return "invited";
+  if (s === "maybe") return "maybe";
+  return "pending";
 }
 
 // =====================
@@ -1465,6 +1777,7 @@ function cancelPendingChange() {
   }
 
   const ss = SpreadsheetApp.openById(getSpreadsheetId_());
+  const schedule = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
   const cells = new Map();
   pending.forEach(p => {
     const key = `${p.sheetName}|${p.row}|${p.col}`;
@@ -1483,6 +1796,23 @@ function cancelPendingChange() {
     } catch (_) {}
   });
   props.deleteProperty("MONTH_EDIT_GUARD");
+
+  if (schedule) {
+    ensureScheduleHeaders_(schedule);
+    const header = schedule.getRange(1, 1, 1, schedule.getLastColumn()).getValues()[0];
+    const H = headerIndex_(header);
+    const scheduleCells = new Map();
+    pending.forEach(p => {
+      if (!p || !p.dateKey || !p.role) return;
+      const key = `${p.dateKey}|${p.role}`;
+      if (!scheduleCells.has(key)) scheduleCells.set(key, p);
+    });
+    scheduleCells.forEach(p => {
+      if (H[p.role] == null) return;
+      const scheduleRow = findOrCreateScheduleRowByDate_(schedule, p.dateKey);
+      schedule.getRange(scheduleRow, H[p.role] + 1).setValue(p.fromEmail || "");
+    });
+  }
 
   clearPendingAttention_(ss, pending);
   clearPendingChanges_();
