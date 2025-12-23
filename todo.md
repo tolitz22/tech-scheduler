@@ -10,3 +10,7 @@
 - [X] Your Volunteer Schedule for the Month of <Month> <Year>
 
 - [X] Add sms
+
+
+- [] sidebar for this month schedule
+    - include the rsvp status

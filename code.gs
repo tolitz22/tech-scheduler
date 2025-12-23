@@ -105,6 +105,9 @@ const MONTH_HEADERS = [
   "Audio Email", "Livestream Email", "PPT Email",
   "Audio RSVP", "Livestream RSVP", "PPT RSVP",
 ];
+const MONTH_ROW_BG_EVEN = "#ffffff";
+const MONTH_ROW_BG_ODD = "#fbfdff";
+const MONTH_PENDING_BG = "#fdba74";
 
 // =====================
 // PENDING CONFIRM STATE
@@ -1287,6 +1290,7 @@ function onMonthlyEditOptionB(e) {
         toEmail: pickedEmail || "",
         createdAt: new Date().toISOString(),
       });
+      setMonthlyRoleAttention_(sh, row, col, true);
 
       ss.toast(
         `Saved: ${roleLabel} updated for ${prettyDate}.\nAction needed: Tech Scheduler → Confirm & Send Emails`,
@@ -1399,7 +1403,7 @@ function openConfirmSendSidebar() {
         </div>
         <ul style="margin:0;padding-left:18px;font-size:13px;color:#0f172a;line-height:1.6;">
           <li>Update the Calendar event description</li>
-          <li>Send notification emails to affected volunteers</li>
+          <li>Send sms and notification emails to affected volunteers</li>
         </ul>
       </div>
 
@@ -1448,6 +1452,7 @@ function confirmAndSendEmails() {
     syncScheduleChangesForRow_(ss, schedule, scheduleRow);
   });
 
+  clearPendingAttention_(ss, pending);
   clearPendingChanges_();
   ss.toast("Confirmed ✅ Calendar updated and emails sent.", "Tech Scheduler", 6);
 }
@@ -1479,6 +1484,7 @@ function cancelPendingChange() {
   });
   props.deleteProperty("MONTH_EDIT_GUARD");
 
+  clearPendingAttention_(ss, pending);
   clearPendingChanges_();
   ss.toast("Cancelled. No emails sent.", "Tech Scheduler", 6);
 }
@@ -1638,7 +1644,8 @@ function applyPrettyMonthFormattingOptionB_(sh) {
     body.setBorder(true, true, true, true, true, true);
 
     for (let r = 2; r <= lastRow; r++) {
-      sh.getRange(r, 1, 1, MONTH_HEADERS.length).setBackground((r % 2) === 0 ? "#ffffff" : "#fbfdff");
+      sh.getRange(r, 1, 1, MONTH_HEADERS.length)
+        .setBackground((r % 2) === 0 ? MONTH_ROW_BG_EVEN : MONTH_ROW_BG_ODD);
     }
     sh.getRange(2, 1, lastRow - 1, 1).setFontWeight("bold");
   }
@@ -1701,6 +1708,26 @@ function applyPrettyMonthFormattingOptionB_(sh) {
   ];
 
   sh.setConditionalFormatRules(rules);
+}
+
+function setMonthlyRoleAttention_(sh, row, col, on) {
+  if (!sh || !row || !col) return;
+  const bg = on ? MONTH_PENDING_BG : ((row % 2) === 0 ? MONTH_ROW_BG_EVEN : MONTH_ROW_BG_ODD);
+  sh.getRange(row, col).setBackground(bg);
+}
+
+function clearPendingAttention_(ss, pending) {
+  const cells = new Map();
+  pending.forEach(p => {
+    if (!p || !p.sheetName || !p.row || !p.col) return;
+    const key = `${p.sheetName}|${p.row}|${p.col}`;
+    if (!cells.has(key)) cells.set(key, p);
+  });
+  cells.forEach(p => {
+    const sh = ss.getSheetByName(p.sheetName);
+    if (!sh) return;
+    setMonthlyRoleAttention_(sh, p.row, p.col, false);
+  });
 }
 
 // =====================
