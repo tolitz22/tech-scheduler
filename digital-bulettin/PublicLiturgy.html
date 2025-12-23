@@ -1,3 +1,7 @@
+<!-- =====================
+PublicLiturgy.html
+"Scripture Alone" screenshot-style UI (parchment + serif + segmented tabs)
+===================== -->
 <!doctype html>
 <html>
 <head>
@@ -5,177 +9,355 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      --bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb;
-      --btn:#111; --btnText:#fff;
-      --radius:16px;
-      --pad:16px;
-      --font: 15px;
-      --fontLarge: 18px;
-    }
-    body{font-family:system-ui;margin:0;background:var(--bg);color:var(--text)}
-    .wrap{max-width:920px;margin:0 auto;padding:18px}
-    .top{
-      display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
-      margin-bottom:12px;
-    }
-    .brand{display:flex;align-items:center;gap:10px}
-    .logo{
-      width:40px;height:40px;border-radius:12px;background:#111;color:#fff;
-      display:flex;align-items:center;justify-content:center;font-weight:900;
-    }
-    .h1{margin:0;font-size:22px;font-weight:900}
-    .muted{color:var(--muted);font-size:13px;margin-top:2px}
-    .controls{display:flex;gap:8px;flex-wrap:wrap}
-    .tab{
-      border:1px solid var(--line);background:var(--card);border-radius:999px;
-      padding:8px 12px;font-weight:900;cursor:pointer;font-size:13px;
-    }
-    .tab.active{background:var(--btn);color:var(--btnText);border-color:var(--btn)}
-    .grid{display:grid;grid-template-columns:1fr;gap:12px}
-    .card{
-      background:var(--card);border:1px solid var(--line);
-      border-radius:var(--radius);padding:var(--pad);
-      box-shadow:0 10px 22px rgba(0,0,0,.04);
-    }
-    .sectionTitle{font-weight:900;font-size:16px}
-    .meta{color:var(--muted);font-size:12px;margin-top:4px}
-    .btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-    .btn{
-      border:1px solid var(--line);background:var(--card);border-radius:12px;
-      padding:10px 12px;font-weight:900;cursor:pointer
+      /* Parchment palette */
+      --bg: #e9e3d8;
+      --paper: #f6f1e7;
+      --paper2:#f2ece1;
+      --ink: #1b1b1b;
+      --muted: #6b645b;
+      --line: rgba(0,0,0,.10);
+
+      --tabBg: rgba(0,0,0,.12);
+      --tabActive: #3b3a38;
+      --tabActiveText: #ffffff;
+      --tabText: #2e2a26;
+
+      --shadow: 0 18px 40px rgba(0,0,0,.14);
+
+      /* Typography (close to screenshot) */
+      --serif: Georgia, "Times New Roman", Times, serif;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+
+      --h1: 28px;
+      --h2: 18px;
+      --body: 16px;
+      --bodyLH: 1.75;
+
+      --h1L: 34px;
+      --h2L: 22px;
+      --bodyL: 20px;
+
+      --radius: 16px;
+      --pad: 16px;
+      --max: 520px; /* screenshot is narrow phone layout */
     }
 
-    /* Reader modal */
-    .overlay{
-      position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;
-    }
-    .overlay.show{display:flex}
-    .sheet{
-      width:100%;max-width:920px;margin:0 auto;background:var(--card);
-      border-radius:18px 18px 0 0;padding:16px;border:1px solid var(--line);
-      max-height:88vh;overflow:auto;
-    }
-    .readerTop{display:flex;justify-content:space-between;gap:12px;align-items:center}
-    .readerTitle{font-weight:900;font-size:18px;margin:0}
-    .close{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:8px 10px;font-weight:900;cursor:pointer}
-    .body{
-      margin-top:12px;white-space:pre-wrap;line-height:1.65;
-      font-size:var(--font);
-    }
-
-    /* Large text toggle */
-    body.large .body{font-size:var(--fontLarge)}
-    body.large .sectionTitle{font-size:18px}
-
-    /* Dark mode */
     body.dark{
-      --bg:#0b0f17; --card:#111827; --text:#f3f4f6; --muted:#9ca3af; --line:#243040;
-      --btn:#f3f4f6; --btnText:#111827;
+      --bg: #0e0f12;
+      --paper: #14161a;
+      --paper2:#101216;
+      --ink: #f3f3f3;
+      --muted: #b8b1a6;
+      --line: rgba(255,255,255,.12);
+
+      --tabBg: rgba(255,255,255,.10);
+      --tabActive: #e9e3d8;
+      --tabActiveText:#111;
+      --tabText: #e9e3d8;
+
+      --shadow: 0 18px 40px rgba(0,0,0,.45);
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      color:var(--ink);
+      background:
+        radial-gradient(1200px 700px at 50% -200px, rgba(255,255,255,.35), rgba(255,255,255,0)),
+        linear-gradient(180deg, rgba(0,0,0,.06), rgba(0,0,0,0)),
+        var(--bg);
+      font-family: var(--sans);
+    }
+
+    /* Phone frame-ish container */
+    .wrap{
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 14px 12px 24px;
+    }
+
+    /* Top app bar */
+    .appbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding: 6px 4px 10px;
+    }
+    .iconBtn{
+      width:40px;height:40px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.18);
+      color:var(--ink);
+      display:flex;align-items:center;justify-content:center;
+      font-weight:900;
+      cursor:pointer;
+    }
+    body.dark .iconBtn{ background: rgba(0,0,0,.25); }
+
+    .brand{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:4px;
+      flex:1;
+      min-width:0;
+    }
+    .brand .logo{
+      font-family: var(--serif);
+      font-weight:700;
+      font-size: 12px;
+      letter-spacing:.10em;
+      text-transform:uppercase;
+      color:var(--muted);
+      line-height:1.1;
+      text-align:center;
+    }
+    .lang{
+      width:40px;height:40px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.18);
+      color:var(--ink);
+      display:flex;align-items:center;justify-content:center;
+      font-weight:900;
+      font-size:12px;
+    }
+    body.dark .lang{ background: rgba(0,0,0,.25); }
+
+    /* Paper */
+    .paper{
+      background:
+        radial-gradient(900px 480px at 50% -120px, rgba(255,255,255,.45), rgba(255,255,255,0)),
+        linear-gradient(180deg, var(--paper), var(--paper2));
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+
+    /* Header inside paper */
+    .header{
+      padding: 14px var(--pad) 10px;
+      border-bottom:1px solid var(--line);
+      text-align:center;
+    }
+    .h1{
+      margin:0;
+      font-family: var(--serif);
+      font-size: var(--h1);
+      font-weight: 700;
+      letter-spacing: .03em;
+      text-transform:uppercase;
+    }
+    .date{
+      margin-top:6px;
+      font-family: var(--serif);
+      font-size: 18px;
+      color: var(--muted);
+    }
+
+    /* Segmented tabs like screenshot */
+    .tabsRow{
+      padding: 10px var(--pad) 12px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      gap:10px;
+      justify-content:flex-start;
+      flex-wrap:wrap;
+    }
+    .seg{
+      display:inline-flex;
+      border:1px solid var(--line);
+      background: var(--tabBg);
+      border-radius: 10px;
+      overflow:hidden;
+    }
+    .seg button{
+      border:0;
+      padding: 8px 12px;
+      font-weight: 900;
+      font-size: 12px;
+      letter-spacing:.06em;
+      text-transform:uppercase;
+      background: transparent;
+      color: var(--tabText);
+      cursor:pointer;
+    }
+    .seg button.active{
+      background: var(--tabActive);
+      color: var(--tabActiveText);
+    }
+
+    /* Content */
+    .content{
+      padding: 10px var(--pad) 16px;
+    }
+
+    /* ORDER list */
+    .orderList{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .item{
+      padding: 10px 10px;
+      border-radius: 12px;
+      border:1px solid transparent;
+      cursor:pointer;
+    }
+    .item:hover{ border-color: rgba(0,0,0,.08); }
+    body.dark .item:hover{ border-color: rgba(255,255,255,.10); }
+
+    .itemTitle{
+      font-family: var(--sans);
+      font-weight: 800;
+      font-size: var(--h2);
+      line-height:1.25;
+      margin:0;
+      color:var(--ink);
+    }
+    .itemMeta{
+      margin-top:4px;
+      font-size: 13px;
+      color: var(--muted);
+      font-family: var(--sans);
+    }
+    .itemMeta em{
+      font-style:normal;
+      opacity:.95;
+    }
+
+    /* Selected section expands with body below like screenshot */
+    .item.selected{
+      border-color: var(--line);
+      background: rgba(255,255,255,.25);
+    }
+    body.dark .item.selected{ background: rgba(0,0,0,.18); }
+
+    .bodyBlock{
+      margin-top: 10px;
+      padding: 12px 12px;
+      border-left: 3px solid rgba(0,0,0,.18);
+      background: rgba(255,255,255,.20);
+      border-radius: 10px;
+      font-family: var(--serif);
+      font-size: var(--body);
+      line-height: var(--bodyLH);
+      white-space: pre-wrap;
+      color: var(--ink);
+    }
+    body.dark .bodyBlock{
+      border-left-color: rgba(255,255,255,.18);
+      background: rgba(255,255,255,.06);
+    }
+
+    /* Large text */
+    body.large .h1{ font-size: var(--h1L); }
+    body.large .itemTitle{ font-size: var(--h2L); }
+    body.large .bodyBlock{ font-size: var(--bodyL); }
+
+    /* Footer hint row (optional) */
+    .footerHint{
+      padding: 10px var(--pad) 14px;
+      border-top:1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      text-align:center;
+      font-family: var(--sans);
+    }
+
+    /* Mobile polish */
+    @media (max-width:380px){
+      :root{ --h1: 24px; --max: 100%; }
+      .seg button{ padding: 8px 10px; }
     }
   </style>
 </head>
+
 <body>
 <script>
   const BOOT = <?!= JSON.stringify(boot) ?>;
 </script>
 
 <div class="wrap">
-  <div class="top">
+  <div class="appbar">
+    <button class="iconBtn" aria-label="Menu">≡</button>
     <div class="brand">
-      <div class="logo">SA</div>
-      <div>
-        <div class="h1" id="heading">LORD’S DAY</div>
-        <div class="muted" id="dateLabel"></div>
-      </div>
+      <div class="logo">SCRIPTURE ALONE<br/>BAPTIST CHURCH</div>
     </div>
-
-    <div class="controls">
-      <button class="tab active" id="tabOrder">ORDER</button>
-      <button class="tab" id="tabLarge">LARGE TEXT</button>
-      <button class="tab" id="tabDark">DARK</button>
-    </div>
+    <div class="lang">EN</div>
   </div>
 
-  <div class="grid" id="list"></div>
-</div>
-
-<!-- Reader -->
-<div class="overlay" id="overlay">
-  <div class="sheet">
-    <div class="readerTop">
-      <div>
-        <h2 class="readerTitle" id="rTitle"></h2>
-        <div class="muted" id="rMeta"></div>
-      </div>
-      <button class="close" id="closeBtn">Close</button>
+  <div class="paper">
+    <div class="header">
+      <h1 class="h1" id="h1">LORD’S DAY</h1>
+      <div class="date" id="date">December 21, 2025</div>
     </div>
-    <div class="body" id="rBody"></div>
+
+    <div class="tabsRow">
+      <div class="seg" aria-label="Tabs">
+        <button id="tabOrder" class="active" type="button">ORDER</button>
+        <button id="tabLarge" type="button">LARGE TEXT</button>
+        <button id="tabDark" type="button">DARK</button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div id="error" style="display:none; color:#b91c1c; font-weight:900; margin-bottom:10px;"></div>
+      <div class="orderList" id="list"></div>
+    </div>
+
+    <div class="footerHint">Scroll down to follow the service.</div>
   </div>
 </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
 
-  // Title
-  $("heading").textContent = BOOT.heading || "LORD’S DAY";
-  $("dateLabel").textContent = BOOT.dateLabel || BOOT.service_id || "";
+  // --- Preferences ---
+  const KEY_LARGE = "sabc_large";
+  const KEY_DARK  = "sabc_dark";
 
-  // Render list
-  const list = $("list");
-  const sections = (BOOT.sections || []).slice();
-
-  function renderList(){
-    list.innerHTML = "";
-    sections.forEach(s => {
-      const card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML = `
-        <div class="sectionTitle">${escapeHtml(s.title || s.type)}</div>
-        <div class="meta">${escapeHtml(s.posture || "")}${s.posture ? " • " : ""}Order ${s.order}</div>
-        <div class="btnrow">
-          <button class="btn">Open</button>
-        </div>
-      `;
-      card.querySelector("button").onclick = () => openReader(s);
-      list.appendChild(card);
-    });
+  function applyPrefs(){
+    if (localStorage.getItem(KEY_LARGE) === "1") document.body.classList.add("large");
+    if (localStorage.getItem(KEY_DARK) === "1") document.body.classList.add("dark");
+    syncTabs();
   }
 
-  function openReader(s){
-    $("rTitle").textContent = s.title || s.type;
-    $("rMeta").textContent = (s.posture ? `(${s.posture})` : "") + (s.type ? ` • ${s.type}` : "");
-    $("rBody").textContent = s.body || "";
-    $("overlay").classList.add("show");
+  function syncTabs(){
+    $("tabLarge").classList.toggle("active", document.body.classList.contains("large"));
+    $("tabDark").classList.toggle("active", document.body.classList.contains("dark"));
+    // ORDER tab always active (this screen is ORDER view)
+    $("tabOrder").classList.add("active");
   }
 
-  $("closeBtn").onclick = () => $("overlay").classList.remove("show");
-  $("overlay").onclick = (e) => { if (e.target.id === "overlay") $("overlay").classList.remove("show"); };
-
-  // Toggles
   $("tabLarge").onclick = () => {
     document.body.classList.toggle("large");
-    setActiveToggles();
+    localStorage.setItem(KEY_LARGE, document.body.classList.contains("large") ? "1" : "0");
+    syncTabs();
   };
   $("tabDark").onclick = () => {
     document.body.classList.toggle("dark");
-    setActiveToggles();
+    localStorage.setItem(KEY_DARK, document.body.classList.contains("dark") ? "1" : "0");
+    syncTabs();
   };
   $("tabOrder").onclick = () => {
-    // kept for UI parity, list is the main view
-    setActiveTab("tabOrder");
+    // already in ORDER view
+    syncTabs();
   };
 
-  function setActiveTab(id){
-    ["tabOrder","tabLarge","tabDark"].forEach(x => $(x).classList.remove("active"));
-    $(id).classList.add("active");
-  }
-  function setActiveToggles(){
-    // ORDER stays active as primary tab
-    setActiveTab("tabOrder");
-    // visually indicate toggles
-    $("tabLarge").classList.toggle("active", document.body.classList.contains("large"));
-    $("tabDark").classList.toggle("active", document.body.classList.contains("dark"));
-  }
+  applyPrefs();
+
+  // --- Data ---
+  const sections = (BOOT.sections || []).slice().sort((a,b)=> (a.order||0)-(b.order||0));
+
+  // Header text: match screenshot vibe
+  // BOOT.heading is like "2025-12-21". We'll derive date display if you want later.
+  // For now: show BOOT.dateLabel below. You can edit this to your actual "Lord's Day 51".
+  $("h1").textContent = "LORD’S DAY";
+  $("date").textContent = (BOOT.dateLabel || BOOT.service_id || "");
 
   function escapeHtml(str){
     return String(str || "")
@@ -183,8 +365,68 @@
       .replaceAll('"',"&quot;").replaceAll("'","&#039;");
   }
 
-  renderList();
-  setActiveToggles();
+  // Convert posture to screenshot-style: (Seated) or (Standing)
+  function postureLabel(p){
+    const v = String(p||"").trim().toUpperCase();
+    if (!v) return "";
+    if (v === "SEATED") return "(Seated)";
+    if (v === "STANDING") return "(Standing)";
+    return "(" + v.charAt(0) + v.slice(1).toLowerCase() + ")";
+  }
+
+  // Default selected section: first section with non-empty body, else first
+  let selectedIndex = Math.max(0, sections.findIndex(s => String(s.body||"").trim() !== ""));
+  if (selectedIndex < 0) selectedIndex = 0;
+
+  function render(){
+    const list = $("list");
+    list.innerHTML = "";
+
+    if (BOOT.error) {
+      $("error").style.display = "block";
+      $("error").textContent = "Error: " + BOOT.error;
+      return;
+    }
+    if (!sections.length) {
+      list.innerHTML = `<div style="color:var(--muted); font-family:var(--serif);">
+        No sections found for <b>${escapeHtml(BOOT.service_id || "")}</b>.
+      </div>`;
+      return;
+    }
+
+    sections.forEach((s, idx) => {
+      const item = document.createElement("div");
+      item.className = "item" + (idx === selectedIndex ? " selected" : "");
+      const title = escapeHtml(s.title || s.type || "Section");
+      const meta = postureLabel(s.posture);
+
+      // “Call to Worship (Seated)” style
+      const titleLine = meta ? `${title} <span style="font-weight:600; color:var(--muted);">${escapeHtml(meta)}</span>` : title;
+
+      item.innerHTML = `
+        <div class="itemTitle">${titleLine}</div>
+        <div class="itemMeta">${escapeHtml(s.type || "")}${s.type ? " " : ""}${s.order ? "• " : ""}${s.order ? ("Order " + escapeHtml(s.order)) : ""}</div>
+      `;
+
+      item.onclick = () => {
+        selectedIndex = idx;
+        render();
+      };
+
+      if (idx === selectedIndex) {
+        const body = String(s.body || "").trim() || "—";
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "bodyBlock";
+        bodyEl.textContent = body;
+        item.appendChild(bodyEl);
+      }
+
+      list.appendChild(item);
+    });
+  }
+
+  render();
 </script>
+
 </body>
 </html>

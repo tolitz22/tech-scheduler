@@ -1,18 +1,38 @@
+<!-- =====================
+PublicToday.html (QR Landing)
+===================== -->
 <!doctype html>
 <html>
 <head>
   <base target="_top" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body{font-family:system-ui;margin:0;background:#f6f7fb}
-    .wrap{max-width:720px;margin:0 auto;padding:20px}
-    .card{background:#fff;border-radius:18px;padding:18px;box-shadow:0 10px 22px rgba(0,0,0,.06)}
-    .title{font-weight:900;font-size:22px;margin:0}
-    .muted{color:#6b7280;font-size:13px;margin-top:6px}
-    .btn{display:inline-block;margin-top:14px;background:#111;color:#fff;
-      padding:12px 14px;border-radius:14px;text-decoration:none;font-weight:900}
-    .pill{display:inline-block;border:1px solid #e5e7eb;border-radius:999px;padding:4px 10px;font-size:12px;color:#374151}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+    :root{
+      --bg:#f6f7fb; --card:#fff; --text:#0f172a; --muted:#64748b; --line:#e5e7eb;
+      --shadow: 0 12px 28px rgba(15, 23, 42, .06);
+      --radius: 18px;
+    }
+    body{font-family:system-ui;margin:0;background:var(--bg);color:var(--text)}
+    .wrap{max-width:860px;margin:0 auto;padding:20px}
+    .card{
+      background:var(--card);border-radius:24px;padding:22px;border:1px solid var(--line);
+      box-shadow:var(--shadow);
+    }
+    .chips{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    .chip{
+      display:inline-flex;align-items:center;gap:8px;
+      border:1px solid var(--line);padding:6px 12px;border-radius:999px;
+      font-size:13px;color:#334155;background:#fff;
+    }
+    h1{margin:0;font-size:30px;line-height:1.1;font-weight:900}
+    .sub{margin-top:10px;color:var(--muted);font-size:15px}
+    .btn{
+      display:inline-block;margin-top:16px;
+      background:#0b1220;color:#fff;text-decoration:none;font-weight:900;
+      padding:14px 18px;border-radius:16px;
+      box-shadow: 0 10px 18px rgba(0,0,0,.12);
+    }
+    .tip{margin-top:14px;color:var(--muted);font-size:13px}
   </style>
 </head>
 <body>
@@ -22,26 +42,25 @@
 
 <div class="wrap">
   <div class="card">
-    <div class="row">
-      <span class="pill">SCRIPTURE ALONE</span>
-      <span class="pill">Today</span>
+    <div class="chips">
+      <span class="chip">SCRIPTURE ALONE</span>
+      <span class="chip">Today</span>
     </div>
 
-    <h1 class="title">Open Today’s Liturgy</h1>
-    <div class="muted">Service: <b id="sid"></b></div>
+    <h1>Open Today’s Liturgy</h1>
+    <div class="sub">Service: <b id="sid"></b></div>
 
     <a class="btn" id="openBtn">Open Today’s Liturgy</a>
 
-    <div class="muted" style="margin-top:12px;">
-      Tip: Add this page as your QR target.
-    </div>
+    <div class="tip">Tip: Add this page as your QR target.</div>
   </div>
 </div>
 
 <script>
-  document.getElementById("sid").textContent = BOOT.service_id;
+  document.getElementById("sid").textContent = BOOT.service_id || "";
   const base = location.href.split("?")[0];
-  document.getElementById("openBtn").href = base + "?p=liturgy&service_id=" + encodeURIComponent(BOOT.service_id);
+  document.getElementById("openBtn").href =
+    base + "?p=liturgy&service_id=" + encodeURIComponent(BOOT.service_id || "");
 </script>
 </body>
 </html>
