@@ -1,3 +1,16 @@
 https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec?p=liturgy&service_id=2025-12-21-AM
 https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec
 https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec?p=admin
+
+
+
+=IMAGE(
+ "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" &
+ ENCODEURL(
+  "https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec?p=liturgy&service_id=" & A2
+ )
+)
+
+
+QR CODE GENERATOR
+https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec?p=liturgy&service_id=2025-12-21-AM

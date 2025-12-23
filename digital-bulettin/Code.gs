@@ -11,6 +11,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("Bulletin")
     .addItem("Clear Public Cache", "clearPublicCache")
+    .addItem("Generate QR Codes", "generateQrCodes")
     .addToUi();
 }
 
@@ -34,6 +35,53 @@ function clearPublicCache() {
     `Cleared ${keys.size} service cache key(s).`,
     SpreadsheetApp.getUi().ButtonSet.OK
   );
+}
+
+function generateQrCodes() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(CONFIG.SERVICES_SHEET);
+  if (!sh) {
+    SpreadsheetApp.getUi().alert(`Sheet not found: ${CONFIG.SERVICES_SHEET}`);
+    return;
+  }
+
+  const range = sh.getDataRange();
+  const values = range.getValues();
+  if (values.length <= 1) {
+    SpreadsheetApp.getUi().alert("No data rows found.");
+    return;
+  }
+
+  const headers = values[0].map(h => String(h || "").trim().toLowerCase());
+  const sidIdx = headers.indexOf("service_id");
+  const qrIdx = headers.indexOf("qr_code");
+  if (sidIdx < 0 || qrIdx < 0) {
+    SpreadsheetApp.getUi().alert("Missing required headers: service_id and/or qr_code.");
+    return;
+  }
+
+  const startRow = 2;
+  const numRows = values.length - 1;
+  const qrRange = sh.getRange(startRow, qrIdx + 1, numRows, 1);
+  const qrValues = qrRange.getValues();
+  const formulaBase = "https://script.google.com/macros/s/AKfycbxBj2B8nCccx8wWuFmODDbjoMicggRFly_lBC8F1n0iz45ZWwSCXN4UglUvpa1NqJ22/exec?p=liturgy&service_id=";
+
+  const out = [];
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+    const existing = String(qrValues[i][0] || "").trim();
+    const sid = String(values[i + 1][sidIdx] || "").trim();
+    if (existing || !sid) {
+      out.push([existing]);
+      continue;
+    }
+
+    const formula = `=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" & ENCODEURL("${formulaBase}" & A${row}))`;
+    out.push([formula]);
+  }
+
+  qrRange.setFormulas(out);
+  SpreadsheetApp.getUi().alert("QR codes generated for empty rows.");
 }
 
 // Master list (defaults used by Admin + skeleton)
