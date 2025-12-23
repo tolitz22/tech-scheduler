@@ -123,21 +123,17 @@ function onOpen() {
   const menu = ui.createMenu("Tech Scheduler");
 
   menu
+    .addItem("Open Web App", "openWebAppUrl_")
     .addItem("Start Auto Batch Scheduler", "startAutoBatchScheduler")
-    .addSeparator()
-    .addItem("Setup Auto-Sync on Schedule Edit", "setupAutoSyncOnEdit")
-    .addItem("Setup Monthly Edit Sync ", "setupMonthlyEditSyncOptionB")
-    .addSeparator()
-    .addItem("Generate Monthly Sheets ", "generateMonthlySheetsOptionB")
-    .addItem("Sync Monthly Sheets from Schedule ", "syncMonthlySheetsFromScheduleOptionB")
+    .addSeparator()         
+    .addItem("Generate Monthly Sheets (Remove After Live)", "generateMonthlySheetsOptionB")    
     .addSeparator()
     .addItem("Setup Monthly Reminder (Last Day)", "setupMonthlyScheduleReminderTrigger")
     .addItem("Send Monthly Reminder Now", "sendMonthlyScheduleReminder_")
     .addSeparator()
     .addItem("Check Email Quota", "logEmailQuota")
-    .addSeparator()
-    .addItem("Confirm & Send Emails", "openConfirmSendSidebar")
-    .addItem("Cancel Pending Change", "cancelPendingChange")
+    .addSeparator()    
+    .addItem("Confirm & Send Emails", "openConfirmSendSidebar")    
     .addSeparator()
     .addItem("Setup RSVP Sync (ICS)", "setupRsvpSyncTrigger")
     .addItem("Sync RSVPs Now", "syncRsvpStatuses")    
@@ -180,6 +176,34 @@ function showWebAppHelp_() {
     "Security is enforced by signed links + roster + assignment checks."
   );
 }
+
+function openWebAppUrl_() {
+  if (!CONFIG.WEBAPP_URL) {
+    SpreadsheetApp.getUi().alert("WEBAPP_URL is not set.");
+    return;
+  }
+
+  const url = escapeHtml_(CONFIG.WEBAPP_URL);
+  const html = HtmlService.createHtmlOutput(`
+    <div style="font-family:Arial,Helvetica,sans-serif;padding:16px;">
+      <div style="font-size:16px;font-weight:800;margin-bottom:6px;">Open Web App</div>
+      <div style="font-size:13px;color:#475569;margin-bottom:12px;">
+        Click the button below to open the public schedule page.
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <a href="${url}" target="_blank"
+          style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;
+          padding:8px 12px;border-radius:10px;font-weight:700;">
+          Open Web App
+        </a>
+        <span style="font-size:12px;color:#64748b;word-break:break-all;">${url}</span>
+      </div>
+    </div>
+  `).setWidth(520).setHeight(200);
+
+  SpreadsheetApp.getUi().showModalDialog(html, "Web App");
+}
+
 
 // =====================
 // WEB APP ENDPOINT (YES/NO buttons)
