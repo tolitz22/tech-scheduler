@@ -1,0 +1,394 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top" />
+  <style>
+    body{font-family:system-ui;margin:0;background:#f6f7fb}
+    .wrap{max-width:860px;margin:0 auto;padding:18px}
+    .card{background:#fff;border-radius:16px;padding:18px;box-shadow:0 10px 22px rgba(0,0,0,.05)}
+    h1{margin:0 0 6px;font-size:18px}
+    .muted{color:#6b7280;font-size:13px}
+    label{display:block;font-weight:800;margin:14px 0 6px}
+    input,select,textarea{
+      width:100%;padding:10px;border-radius:12px;border:1px solid #d9dbe6;
+      font-size:14px;box-sizing:border-box
+    }
+    textarea{min-height:260px;line-height:1.55}
+    .row2{display:grid;grid-template-columns:1fr 180px;gap:12px}
+    .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+    button{
+      padding:10px 14px;border-radius:12px;border:1px solid #d9dbe6;
+      background:#111;color:#fff;font-weight:900;cursor:pointer
+    }
+    button.secondary{background:#fff;color:#111}
+    button.ghost{background:#fff;color:#111;border-style:dashed}
+    .toast{margin-top:10px;font-size:13px}
+    .pill{display:inline-block;border:1px solid #e5e7eb;border-radius:999px;padding:2px 8px;font-size:12px;color:#374151}
+    .topbar{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+    .topbar > div{flex:1;min-width:220px}
+    .stepbox{margin-top:10px;padding:10px;border:1px solid #eee;border-radius:12px;background:#fafafa}
+    .stepTitle{font-weight:900;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .badge{
+      display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;
+      border:1px solid #e5e7eb;background:#fff;color:#111;font-weight:800;
+    }
+    .badge.warn{border-color:#f59e0b;color:#92400e;background:#fffbeb}
+    .badge.ok{border-color:#10b981;color:#065f46;background:#ecfdf5}
+    .badge.saving{border-color:#60a5fa;color:#1e3a8a;background:#eff6ff}
+    .mini{font-size:12px;color:#6b7280}
+    .hr{height:1px;background:#eee;margin:12px 0}
+  </style>
+</head>
+<body>
+
+<script>
+  const BOOT = <?!= JSON.stringify(boot) ?>;
+  const TYPE_META = {};
+  (BOOT.typeMeta || []).forEach(x => TYPE_META[x.type] = x);
+  const FLOWS = BOOT.flows || {};
+</script>
+
+<div class="wrap">
+  <div class="card">
+    <h1>Worship Order — Wizard</h1>
+    <div class="muted">One section at a time. Use <b>Save</b> or <b>Save & Next</b>. Your inputs persist per step.</div>
+
+    <div class="topbar">
+      <div>
+        <label>service_id <span class="pill">required</span></label>
+        <input id="service_id" placeholder="2025-12-21-AM">
+        <div class="mini">Tip: use date + service (ex: <b>2025-12-24-AM</b>).</div>
+      </div>
+
+      <div>
+        <label>flow preset</label>
+        <select id="flow">
+          <option value="AM">AM</option>
+          <option value="PM">PM</option>
+        </select>
+        <div class="muted">Pick AM or PM format.</div>
+      </div>
+
+      <div>
+        <label>start step</label>
+        <select id="startStep"></select>
+        <div class="muted">Jump to any section.</div>
+      </div>
+    </div>
+
+    <div class="stepbox">
+      <div class="stepTitle">
+        <span id="stepTitle">Step</span>
+        <span class="badge" id="statusBadge">Ready</span>
+      </div>
+      <div class="muted" id="stepHint"></div>
+      <div class="hr"></div>
+      <div class="mini" id="stepSubHint">—</div>
+    </div>
+
+    <div class="row2">
+      <div>
+        <label>type</label>
+        <input id="type" readonly>
+      </div>
+      <div>
+        <label>order</label>
+        <input id="order" type="number">
+      </div>
+    </div>
+
+    <div class="row2">
+      <div>
+        <label>title</label>
+        <input id="title">
+      </div>
+      <div>
+        <label>posture</label>
+        <select id="posture"></select>
+      </div>
+    </div>
+
+    <label>body (lyrics / scripture / notes)</label>
+    <textarea id="body" placeholder="Paste content here..."></textarea>
+
+    <div class="btns">
+      <button class="secondary" id="backBtn">Back</button>
+      <button class="secondary" id="saveBtn">Save</button>
+      <button id="saveNextBtn">Save & Next</button>
+      <button class="ghost" id="skipBtn" title="Go next without saving">Skip</button>
+      <button class="secondary" id="clearBtn">Clear Body</button>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+
+  function toast(msg){ $("toast").textContent = msg || ""; }
+  function setBadge(kind, text){
+    const b = $("statusBadge");
+    b.className = "badge" + (kind ? (" " + kind) : "");
+    b.textContent = text || "Ready";
+  }
+
+  function fillSelect(el, items){
+    el.innerHTML = "";
+    (items || []).forEach(v => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = v;
+      el.appendChild(o);
+    });
+  }
+
+  function currentFlowTypes(){
+    const f = $("flow").value;
+    return (FLOWS[f] || []).slice();
+  }
+
+  function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+  // ----- draft cache (local) -----
+  function draftKey(serviceId, flow, type){
+    return `wo_wizard_v1::${serviceId || ""}::${flow || ""}::${type || ""}`;
+  }
+  function loadDraftLocal(serviceId, flow, type){
+    try {
+      const raw = localStorage.getItem(draftKey(serviceId, flow, type));
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function saveDraftLocal(serviceId, flow, type, data){
+    try {
+      localStorage.setItem(draftKey(serviceId, flow, type), JSON.stringify(data));
+    } catch (e) {}
+  }
+
+  // ----- dirty tracking -----
+  let dirty = false;
+  let stepIndex = 0;
+  let lastLoadedFingerprint = "";
+
+  function fingerprintPayload(p){
+    return JSON.stringify({
+      service_id: p.service_id || "",
+      type: p.type || "",
+      order: String(p.order ?? ""),
+      title: p.title || "",
+      posture: p.posture || "",
+      body: p.body || ""
+    });
+  }
+
+  function markDirty(isDirty){
+    dirty = !!isDirty;
+    if (dirty) setBadge("warn", "Unsaved changes");
+    else setBadge("", "Saved / Loaded");
+  }
+
+  function getPayload(){
+    return {
+      service_id: $("service_id").value.trim(),
+      type: $("type").value,
+      order: $("order").value,
+      title: $("title").value,
+      body: $("body").value,
+      posture: $("posture").value
+    };
+  }
+
+  function setFormValues(data, fallbackMeta){
+    const meta = fallbackMeta || { title:"", order:"", posture:"" };
+    $("order").value = data?.order ?? meta.order ?? "";
+    $("title").value = data?.title ?? meta.title ?? "";
+    $("posture").value = data?.posture ?? meta.posture ?? "";
+    $("body").value = data?.body ?? "";
+    markDirty(false);
+    lastLoadedFingerprint = fingerprintPayload(getPayload());
+  }
+
+  function persistCurrentDraft(){
+    const p = getPayload();
+    if (!p.service_id || !p.type) return;
+    saveDraftLocal(p.service_id, $("flow").value, p.type, p);
+  }
+
+  function onAnyInput(){
+    persistCurrentDraft();
+    const fp = fingerprintPayload(getPayload());
+    if (fp !== lastLoadedFingerprint) markDirty(true);
+  }
+
+  // ----- navigation UI -----
+  function rebuildStartStep(){
+    const types = currentFlowTypes();
+    $("startStep").innerHTML = "";
+    types.forEach((t, i) => {
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = `${i+1}. ${(TYPE_META[t]?.title || t)}`;
+      $("startStep").appendChild(opt);
+    });
+  }
+
+  function requireServiceId(){
+    const sid = $("service_id").value.trim();
+    if (!sid){
+      toast("Please enter service_id first (required).");
+      setBadge("warn", "Missing service_id");
+      $("service_id").focus();
+      return null;
+    }
+    return sid;
+  }
+
+  function renderStepShell(){
+    const types = currentFlowTypes();
+    if (!types.length) {
+      toast("Flow is empty. Edit FLOWS in Code.gs.");
+      return null;
+    }
+
+    stepIndex = clamp(stepIndex, 0, types.length - 1);
+    const type = types[stepIndex];
+    const meta = TYPE_META[type] || { title: "", order: 0, posture: "" };
+
+    $("type").value = type;
+
+    $("stepTitle").textContent = `Step ${stepIndex + 1} of ${types.length}: ${meta.title || type}`;
+    $("stepHint").textContent = `Type: ${type}`;
+    $("stepSubHint").textContent = meta.posture ? `Default posture: ${meta.posture}` : "—";
+
+    $("startStep").value = String(stepIndex);
+    return { type, meta };
+  }
+
+  function loadForCurrentStep(){
+    const shell = renderStepShell();
+    if (!shell) return;
+
+    const sid = requireServiceId();
+    if (!sid){
+      setFormValues(null, shell.meta);
+      return;
+    }
+
+    const type = shell.type;
+
+    // 1) local draft (unsaved typing)
+    const local = loadDraftLocal(sid, $("flow").value, type);
+    if (local && local.service_id === sid && local.type === type) {
+      setFormValues(local, shell.meta);
+      toast("Loaded draft (local)");
+      return;
+    }
+
+    // 2) server saved data
+    setBadge("saving", "Loading…");
+    toast("Loading saved data...");
+    google.script.run
+      .withSuccessHandler(res => {
+        setFormValues(res, shell.meta);
+        if (res) {
+          toast("Loaded saved section");
+          setBadge("ok", "Loaded");
+        } else {
+          toast("No saved data yet (using defaults)");
+          setBadge("", "Ready");
+        }
+      })
+      .withFailureHandler(err => {
+        toast(err?.message || String(err));
+        setBadge("warn", "Load failed");
+        setFormValues(null, shell.meta);
+      })
+      .getSection(sid, type);
+  }
+
+  function confirmLoseUnsaved(next){
+    if (!dirty) return next();
+    const ok = confirm("You have unsaved changes on this step. Continue without saving?");
+    if (ok) {
+      markDirty(false);
+      return next();
+    }
+  }
+
+  function save(cb){
+    const sid = requireServiceId();
+    if (!sid) return;
+
+    const payload = getPayload();
+    if (!payload.type){
+      toast("No type selected.");
+      return;
+    }
+    if (!payload.order){
+      toast("Order is required.");
+      setBadge("warn", "Missing order");
+      return;
+    }
+
+    setBadge("saving", "Saving…");
+    toast("Saving...");
+    google.script.run
+      .withSuccessHandler(res => {
+        persistCurrentDraft();
+        markDirty(false);
+        setBadge("ok", "Saved");
+        toast("Saved (" + (res?.mode || "upsert") + (res?.dedup_deleted ? `, dedup ${res.dedup_deleted}` : "") + ")");
+        lastLoadedFingerprint = fingerprintPayload(getPayload());
+        if (cb) cb();
+      })
+      .withFailureHandler(err => {
+        toast(err?.message || String(err));
+        setBadge("warn", "Save failed");
+      })
+      .upsertSection(payload);
+  }
+
+  // init
+  fillSelect($("posture"), BOOT.postureOptions || []);
+  ["service_id","order","title","posture","body"].forEach(id => {
+    const el = $(id);
+    el.addEventListener("input", onAnyInput);
+    el.addEventListener("change", onAnyInput);
+  });
+
+  $("flow").onchange = () => {
+    confirmLoseUnsaved(() => {
+      stepIndex = 0;
+      rebuildStartStep();
+      loadForCurrentStep();
+      toast("Flow changed.");
+    });
+  };
+
+  $("startStep").onchange = (e) => {
+    confirmLoseUnsaved(() => {
+      stepIndex = parseInt(e.target.value, 10) || 0;
+      loadForCurrentStep();
+    });
+  };
+
+  $("service_id").onchange = () => loadForCurrentStep();
+
+  $("backBtn").onclick = () => confirmLoseUnsaved(() => { stepIndex--; loadForCurrentStep(); });
+  $("skipBtn").onclick = () => confirmLoseUnsaved(() => { stepIndex++; loadForCurrentStep(); });
+
+  $("saveBtn").onclick = () => save();
+  $("saveNextBtn").onclick = () => save(() => { stepIndex++; loadForCurrentStep(); });
+
+  $("clearBtn").onclick = () => { $("body").value = ""; onAnyInput(); };
+
+  // first paint
+  rebuildStartStep();
+  renderStepShell();
+  setBadge("", "Ready");
+  loadForCurrentStep();
+</script>
+
+</body>
+</html>
