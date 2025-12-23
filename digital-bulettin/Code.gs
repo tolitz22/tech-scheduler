@@ -6,6 +6,35 @@ const CONFIG = {
   SECTIONS_SHEET: "Sections",
 };
 
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("Bulletin")
+    .addItem("Clear Public Cache", "clearPublicCache")
+    .addToUi();
+}
+
+function clearPublicCache() {
+  const { sh, col } = getSectionsSheet_();
+  const values = sh.getDataRange().getValues();
+  const sidIdx = col["service_id"];
+
+  const keys = new Set();
+  for (let i = 1; i < values.length; i++) {
+    const sid = String(values[i][sidIdx] || "").trim();
+    if (sid) keys.add("svc:" + sid);
+  }
+
+  if (keys.size) {
+    CacheService.getScriptCache().removeAll(Array.from(keys));
+  }
+
+  SpreadsheetApp.getUi().alert(
+    "Cache cleared",
+    `Cleared ${keys.size} service cache key(s).`,
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
 // Master list (defaults used by Admin + skeleton)
 const TYPE_META = [
   { type: "prelude",             title: "Prelude Liturgical Silence For Preparation", order: 10,  posture: "SEATED" },
