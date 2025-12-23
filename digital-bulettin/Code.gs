@@ -4,6 +4,7 @@
 const CONFIG = {
   SPREADSHEET_ID: SpreadsheetApp.getActive().getId(),
   SECTIONS_SHEET: "Sections",
+  SERVICES_SHEET: "Services",
 };
 
 function onOpen() {
@@ -122,11 +123,13 @@ function getBootData_() {
 function buildPublicBoot_(service_id) {
   try {
     const data = getServiceData_(service_id);
+    const service = getServiceInfo_(service_id);
     return {
       ok: true,
       service_id,
-      heading: data.heading || service_id,
-      dateLabel: data.dateLabel || service_id,
+      heading: service.title || data.heading || service_id,
+      dateLabel: service.date || data.dateLabel || service_id,
+      service,
       sections: data.sections || [],
       error: ""
     };
@@ -136,6 +139,7 @@ function buildPublicBoot_(service_id) {
       service_id,
       heading: "Liturgy",
       dateLabel: service_id,
+      service: {},
       sections: [],
       error: (err && err.message) ? err.message : String(err)
     };
@@ -236,6 +240,46 @@ function getServiceData_(service_id) {
 function formatHeading_(service_id) {
   // "2025-12-21-AM" -> "2025-12-21"
   return String(service_id || "").replace(/-AM$|-PM$/i, "");
+}
+
+function getServiceInfo_(service_id) {
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sh = ss.getSheetByName(CONFIG.SERVICES_SHEET);
+  if (!sh) return {};
+
+  const values = sh.getDataRange().getValues();
+  if (values.length <= 1) return {};
+
+  const headers = values[0].map(h => String(h || "").trim().toLowerCase());
+  const idx = (name) => headers.indexOf(name);
+
+  const sidIdx = idx("service_id");
+  if (sidIdx < 0) return {};
+
+  const titleIdx = idx("title");
+  const dateIdx = idx("date");
+  const presiderIdx = idx("presider");
+  const preacherIdx = idx("preacher");
+
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][sidIdx] || "").trim() !== service_id) continue;
+    return {
+      service_id,
+      title: titleIdx >= 0 ? String(values[i][titleIdx] || "").trim() : "",
+      date: dateIdx >= 0 ? formatServiceDate_(values[i][dateIdx]) : "",
+      presider: presiderIdx >= 0 ? String(values[i][presiderIdx] || "").trim() : "",
+      preacher: preacherIdx >= 0 ? String(values[i][preacherIdx] || "").trim() : "",
+    };
+  }
+
+  return {};
+}
+
+function formatServiceDate_(value) {
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "MMMM d, yyyy");
+  }
+  return String(value || "").trim();
 }
 
 // ---------------------

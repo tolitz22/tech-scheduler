@@ -157,6 +157,12 @@ PublicLiturgy.html
       font-size: 18px;
       color: var(--muted);
     }
+    .leaders{
+      margin-top:6px;
+      font-family: var(--serif);
+      font-size: 14px;
+      color: var(--muted);
+    }
 
     /* Segmented tabs like screenshot */
     .tabsRow{
@@ -205,10 +211,11 @@ PublicLiturgy.html
       padding: 10px 10px;
       border-radius: 12px;
       border:1px solid transparent;
-      cursor:pointer;
+      cursor:default;
     }
-    .item:hover{ border-color: rgba(0,0,0,.08); }
-    body.dark .item:hover{ border-color: rgba(255,255,255,.10); }
+    .item.clickable{ cursor:pointer; }
+    .item.clickable:hover{ border-color: rgba(0,0,0,.08); }
+    body.dark .item.clickable:hover{ border-color: rgba(255,255,255,.10); }
 
     .itemTitle{
       font-family: var(--sans);
@@ -294,6 +301,7 @@ PublicLiturgy.html
     <div class="header">
       <h1 class="h1" id="h1">LORD’S DAY</h1>
       <div class="date" id="date">December 21, 2025</div>
+      <div class="leaders" id="leaders"></div>
     </div>
 
     <div class="tabsRow">
@@ -359,6 +367,20 @@ PublicLiturgy.html
   $("h1").textContent = "LORD’S DAY";
   $("date").textContent = (BOOT.dateLabel || BOOT.service_id || "");
 
+  const service = BOOT.service || {};
+  const serviceTitle = String(service.title || BOOT.heading || "LORD'S DAY");
+  const serviceDate = String(service.date || BOOT.dateLabel || BOOT.service_id || "");
+  const presider = String(service.presider || "").trim();
+  const preacher = String(service.preacher || "").trim();
+
+  $("h1").textContent = serviceTitle || "LORD'S DAY";
+  $("date").textContent = serviceDate;
+  const leaderParts = [];
+  if (presider) leaderParts.push("Presider: " + presider);
+  if (preacher) leaderParts.push("Preacher: " + preacher);
+  $("leaders").textContent = leaderParts.join(" | ");
+  if (!leaderParts.length) $("leaders").style.display = "none";
+
   function escapeHtml(str){
     return String(str || "")
       .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
@@ -374,9 +396,8 @@ PublicLiturgy.html
     return "(" + v.charAt(0) + v.slice(1).toLowerCase() + ")";
   }
 
-  // Default selected section: first section with non-empty body, else first
-  let selectedIndex = Math.max(0, sections.findIndex(s => String(s.body||"").trim() !== ""));
-  if (selectedIndex < 0) selectedIndex = 0;
+  // Default selected section: first section with non-empty body
+  let selectedIndex = sections.findIndex(s => String(s.body||"").trim() !== "");
 
   function render(){
     const list = $("list");
@@ -389,14 +410,15 @@ PublicLiturgy.html
     }
     if (!sections.length) {
       list.innerHTML = `<div style="color:var(--muted); font-family:var(--serif);">
-        No sections found for <b>${escapeHtml(BOOT.service_id || "")}</b>.
+        No sections found for <b>${escapeHtml(serviceTitle || BOOT.service_id || "")}</b>.
       </div>`;
       return;
     }
 
     sections.forEach((s, idx) => {
+      const hasBody = String(s.body || "").trim() !== "";
       const item = document.createElement("div");
-      item.className = "item" + (idx === selectedIndex ? " selected" : "");
+      item.className = "item" + (idx === selectedIndex ? " selected" : "") + (hasBody ? " clickable" : "");
       const title = escapeHtml(s.title || s.type || "Section");
       const meta = postureLabel(s.posture);
 
@@ -408,16 +430,22 @@ PublicLiturgy.html
         <div class="itemMeta">${escapeHtml(s.type || "")}${s.type ? " " : ""}${s.order ? "• " : ""}${s.order ? ("Order " + escapeHtml(s.order)) : ""}</div>
       `;
 
-      item.onclick = () => {
-        selectedIndex = idx;
-        render();
-      };
+      const metaEl = item.querySelector(".itemMeta");
+      if (metaEl) metaEl.remove();
+
+      if (hasBody) {
+        item.onclick = () => {
+          selectedIndex = idx;
+          render();
+        };
+      }
 
       if (idx === selectedIndex) {
         const body = String(s.body || "").trim() || "—";
+        const bodyText = String(s.body || "").trim();
         const bodyEl = document.createElement("div");
         bodyEl.className = "bodyBlock";
-        bodyEl.textContent = body;
+        bodyEl.textContent = bodyText;
         item.appendChild(bodyEl);
       }
 
