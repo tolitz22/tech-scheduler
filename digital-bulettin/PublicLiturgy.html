@@ -211,11 +211,10 @@ PublicLiturgy.html
       padding: 10px 10px;
       border-radius: 12px;
       border:1px solid transparent;
-      cursor:default;
+      cursor:pointer;
     }
-    .item.clickable{ cursor:pointer; }
-    .item.clickable:hover{ border-color: rgba(0,0,0,.08); }
-    body.dark .item.clickable:hover{ border-color: rgba(255,255,255,.10); }
+    .item:hover{ border-color: rgba(0,0,0,.08); }
+    body.dark .item:hover{ border-color: rgba(255,255,255,.10); }
 
     .itemTitle{
       font-family: var(--sans);
@@ -396,8 +395,8 @@ PublicLiturgy.html
     return "(" + v.charAt(0) + v.slice(1).toLowerCase() + ")";
   }
 
-  // Default selected section: first section with non-empty body
-  let selectedIndex = sections.findIndex(s => String(s.body||"").trim() !== "");
+  // Default selected section: first
+  let selectedIndex = 0;
 
   function render(){
     const list = $("list");
@@ -416,9 +415,8 @@ PublicLiturgy.html
     }
 
     sections.forEach((s, idx) => {
-      const hasBody = String(s.body || "").trim() !== "";
       const item = document.createElement("div");
-      item.className = "item" + (idx === selectedIndex ? " selected" : "") + (hasBody ? " clickable" : "");
+      item.className = "item" + (idx === selectedIndex ? " selected" : "");
       const title = escapeHtml(s.title || s.type || "Section");
       const meta = postureLabel(s.posture);
 
@@ -433,16 +431,14 @@ PublicLiturgy.html
       const metaEl = item.querySelector(".itemMeta");
       if (metaEl) metaEl.remove();
 
-      if (hasBody) {
-        item.onclick = () => {
-          selectedIndex = idx;
-          render();
-        };
-      }
+      item.onclick = () => {
+        selectedIndex = idx;
+        render();
+      };
 
       if (idx === selectedIndex) {
         const body = String(s.body || "").trim() || "—";
-        const bodyText = String(s.body || "").trim();
+        const bodyText = String(s.body || "").trim() || "-";
         const bodyEl = document.createElement("div");
         bodyEl.className = "bodyBlock";
         bodyEl.textContent = bodyText;
